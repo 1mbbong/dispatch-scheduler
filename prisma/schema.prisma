@@ -1,0 +1,184 @@
+// Prisma Schema for Multi-tenant Dispatch Scheduler
+// All queries must filter by tenantId for app-level tenant isolation
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// CORE ENTITIES
+// ============================================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  categoryLabel String @default("Category") @map("category_label")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users      User[]
+  employees  Employee[]
+  categories Category[]
+  schedules  Schedule[]
+  auditLogs  AuditLog[]
+
+  @@map("tenants")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  email     String
+  name      String
+  password  String   // hashed
+  role      Role     @default(MEMBER)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+model Employee {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  name      String
+  email     String?
+  phone     String?
+  department String @default("")
+  team       String @default("")
+  subTeam    String?
+  joinYear   Int?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments Assignment[]
+  vacations   Vacation[]
+
+  @@index([tenantId])
+  @@map("employees")
+}
+
+// ============================================
+// SCHEDULING ENTITIES
+// ============================================
+
+model Schedule {
+  id          String         @id @default(cuid())
+  tenantId    String         @map("tenant_id")
+  title       String
+  description String?
+  startTime   DateTime       @map("start_time") // UTC
+  endTime     DateTime       @map("end_time")   // UTC
+  status      ScheduleStatus @default(ACTIVE)
+  categoryId  String?        @map("category_id")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category    Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  assignments Assignment[]
+
+  // Index for time-range queries: finding schedules within a date range
+  @@index([tenantId, startTime, endTime])
+  @@index([tenantId, status])
+  @@map("schedules")
+}
+
+enum ScheduleStatus {
+  ACTIVE
+  CANCELLED
+}
+
+model Assignment {
+  id         String   @id @default(cuid())
+  scheduleId String   @map("schedule_id")
+  employeeId String   @map("employee_id")
+  date       DateTime @map("date") // UTC midnight date for this assignment occurrence
+  // Denormalized time fields for fast overlap queries
+  startTime  DateTime @map("start_time") // UTC - copied from schedule
+  endTime    DateTime @map("end_time")   // UTC - copied from schedule
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  schedule Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  // Prevent duplicate assignments per day
+  @@unique([scheduleId, employeeId, date])
+  // Critical index for overlap detection within same tenant
+  // Query pattern: find assignments for employee where time ranges overlap on a specific date
+  @@index([employeeId, date, startTime, endTime])
+  @@map("assignments")
+}
+
+model Vacation {
+  id         String   @id @default(cuid())
+  employeeId String   @map("employee_id")
+  startDate  DateTime @map("start_date") // UTC midnight
+  endDate    DateTime @map("end_date")   // UTC midnight
+  reason     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  // Index for vacation overlap checks
+  @@index([employeeId, startDate, endDate])
+  @@map("vacations")
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  name      String
+  color     String   // Hex color code (e.g. #FF5733)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  schedules Schedule[]
+
+  // Unique category name per tenant
+  @@unique([tenantId, name])
+  @@map("categories")
+}
+
+// ============================================
+// AUDIT LOGGING
+// ============================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String   @map("tenant_id")
+  userId     String?  @map("user_id") // null for system actions
+  action     String   // CREATE_SCHEDULE, UPDATE_SCHEDULE, CANCEL_SCHEDULE, ASSIGN, UNASSIGN, CREATE_VACATION, etc.
+  entityType String   @map("entity_type") // SCHEDULE, ASSIGNMENT, VACATION, EMPLOYEE
+  entityId   String   @map("entity_id")
+  oldData    Json?    @map("old_data")
+  newData    Json?    @map("new_data")
+  timestamp  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Query audit logs by tenant + time
+  @@index([tenantId, timestamp])
+  // Query audit logs by entity
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}

@@ -1,0 +1,9 @@
+2026-02-26
+1 Login/Logout: PASS
+2 Schedule CRUD + Cancel/Reactivate: PASS
+3 Assignment normal: PASS
+4 Conflict flows: PASS
+5 Employee soft delete: PASS
+6 Vacation create + conflict: PASS
+7 Audit Viewer: PASS
+Notes:
