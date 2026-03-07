@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { SerializedEmployeeWithStats } from '@/types';
 import { useToast } from '@/components/ui/toast';
 
@@ -10,9 +10,10 @@ interface VacationFormProps {
     initialEndDate?: Date;
     onSuccess: () => void;
     onCancel: () => void;
+    onDirtyChange?: (dirty: boolean) => void;
 }
 
-export function VacationForm({ employees, initialDate, initialEndDate, onSuccess, onCancel }: VacationFormProps) {
+export function VacationForm({ employees, initialDate, initialEndDate, onSuccess, onCancel, onDirtyChange }: VacationFormProps) {
     const toast = useToast();
     const [employeeId, setEmployeeId] = useState('');
 
@@ -29,6 +30,15 @@ export function VacationForm({ employees, initialDate, initialEndDate, onSuccess
     const [startDate, setStartDate] = useState(defaultStartDateStr);
     const [endDate, setEndDate] = useState(defaultEndDateStr);
     const [reason, setReason] = useState('');
+
+    useEffect(() => {
+        const isCurrentlyDirty =
+            employeeId !== '' ||
+            startDate !== defaultStartDateStr ||
+            endDate !== defaultEndDateStr ||
+            reason !== '';
+        onDirtyChange?.(isCurrentlyDirty);
+    }, [employeeId, startDate, endDate, reason, defaultStartDateStr, defaultEndDateStr, onDirtyChange]);
 
     // Handle Start Date Change: Auto-fix End Date if needed
     const handleStartDateChange = (newStart: string) => {

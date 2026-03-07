@@ -2,20 +2,23 @@ import { requireAuthServer } from '@/lib/auth';
 import { getSchedules, getEmployees } from '@/lib/queries';
 import { redirect } from 'next/navigation';
 import { CalendarViewToggle } from '@/components/calendar-view-toggle';
+import { CustomerAreaFilter } from '@/components/calendar/customer-area-filter';
+import { CustomerAreaSummaryBadges } from '@/components/calendar/customer-area-summary';
 import { DayView } from '@/components/day-view';
 import { DayQuickCreate } from '@/components/day-quick-create';
 import { Suspense } from 'react';
 import { format, addDays, subDays } from 'date-fns';
 import Link from 'next/link';
+import { SerializedScheduleWithAssignments } from '@/types';
 
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-    searchParams: Promise<{ date?: string }>;
+    searchParams: Promise<{ date?: string, areas?: string }>;
 }
 
 export default async function DayCalendarPage({ searchParams }: PageProps) {
-    const { date } = await searchParams;
+    const { date, areas } = await searchParams;
 
     let auth;
     try {
@@ -40,18 +43,35 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
     dayEnd.setHours(23, 59, 59, 999);
 
     // Load schedules and employees in parallel
-    const [schedules, employees] = await Promise.all([
+    const [schedules, employees, customerAreas, scheduleStatuses, workTypes, offices] = await Promise.all([
         getSchedules(auth.tenantId, {
             startDate: dayStart,
             endDate: dayEnd,
         }),
         getEmployees(auth.tenantId),
+        import('@/lib/queries').then(m => m.getCustomerAreas(auth.tenantId)),
+        import('@/lib/queries').then(m => m.getScheduleStatuses(auth.tenantId)),
+        import('@/lib/queries').then(m => m.getWorkTypes(auth.tenantId)),
+        import('@/lib/queries').then(m => m.getOffices(auth.tenantId, false)),
     ]);
+
+    const selectedAreas = areas ? areas.split(',') : null;
+    const availabilitySummary = await import('@/lib/queries').then(m =>
+        m.getAvailabilitySummary(auth.tenantId, currentDate, selectedAreas)
+    );
+
+
 
     const displayDate = format(currentDate, 'EEEE, MMMM d, yyyy');
     const prevDate = format(subDays(currentDate, 1), 'yyyy-MM-dd');
     const nextDate = format(addDays(currentDate, 1), 'yyyy-MM-dd');
     const todayDate = format(today, 'yyyy-MM-dd');
+    const filteredSchedules = selectedAreas === null
+        ? schedules
+        : schedules.filter((s: any) => {
+            if (s.customerAreaId) return selectedAreas.includes(s.customerAreaId);
+            return selectedAreas.includes('unassigned');
+        });
 
     return (
         <div className="space-y-4">
@@ -59,9 +79,15 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
                 <h1 className="text-2xl font-bold tracking-tight text-gray-900">
                     Calendar
                 </h1>
-                <Suspense>
-                    <CalendarViewToggle />
-                </Suspense>
+                <div className="flex items-center gap-4">
+                    <CustomerAreaSummaryBadges summary={availabilitySummary} />
+                    <Suspense>
+                        <CustomerAreaFilter customerAreas={customerAreas} />
+                    </Suspense>
+                    <Suspense>
+                        <CalendarViewToggle />
+                    </Suspense>
+                </div>
             </div>
 
             <div className="bg-white shadow rounded-lg border overflow-hidden">
@@ -71,7 +97,14 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
                         <h2 className="text-lg font-semibold text-gray-900 w-48">
                             {displayDate}
                         </h2>
-                        <DayQuickCreate initialDate={currentDate} employees={employees} />
+                        <DayQuickCreate
+                            initialDate={currentDate}
+                            employees={employees}
+                            customerAreas={customerAreas}
+                            scheduleStatuses={scheduleStatuses}
+                            workTypes={workTypes}
+                            offices={offices}
+                        />
                     </div>
                     <div className="flex items-center rounded-md border bg-white shadow-sm">
                         <a
@@ -97,23 +130,23 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
 
                 {/* Timeline */}
                 <div className="overflow-y-auto max-h-[calc(100vh-280px)]">
-                    <DayView schedules={schedules} />
+                    <DayView schedules={filteredSchedules} />
                 </div>
             </div>
 
             {/* Day Schedules card list */}
-            {schedules.length > 0 && (
+            {filteredSchedules.length > 0 && (
                 <div className="bg-white shadow rounded-lg border overflow-hidden">
                     <div className="px-4 py-3 border-b bg-gray-50">
                         <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
                             Day Schedules
                             <span className="ml-2 font-normal text-gray-400">
-                                {schedules.length}
+                                {filteredSchedules.length}
                             </span>
                         </h3>
                     </div>
                     <ul className="divide-y divide-gray-100">
-                        {schedules.map((schedule) => {
+                        {filteredSchedules.map((schedule: SerializedScheduleWithAssignments) => {
                             const start = new Date(schedule.startTime);
                             const end = new Date(schedule.endTime);
                             const isCancelled = schedule.status === 'CANCELLED';

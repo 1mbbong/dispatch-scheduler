@@ -92,6 +92,7 @@ export async function POST(request: NextRequest) {
                 team: data.team,
                 subTeam: data.subTeam,
                 joinYear: data.joinYear,
+                customerAreaId: data.customerAreaId,
             },
         });
 
@@ -110,6 +111,7 @@ export async function POST(request: NextRequest) {
                 team: employee.team,
                 subTeam: employee.subTeam,
                 joinYear: employee.joinYear,
+                customerAreaId: employee.customerAreaId,
             }),
         });
 

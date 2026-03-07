@@ -13,7 +13,8 @@ import {
     parseISO
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee } from '@/types';
+import { isCancelledStatus } from '@/lib/labels';
+import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee, SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
 import { CalendarCellQuickCreate } from '@/components/calendar-cell-quick-create';
 
 interface WeekViewProps {
@@ -22,9 +23,23 @@ interface WeekViewProps {
     employees: SerializedEmployeeWithStats[];
     vacations: SerializedVacationWithEmployee[];
     canManage: boolean;
+    customerAreas?: SerializedCustomerArea[];
+    scheduleStatuses?: SerializedScheduleStatus[];
+    workTypes?: SerializedWorkType[];
+    offices?: { id: string, name: string }[];
 }
 
-export function WeekView({ initialDate, schedules, employees, vacations, canManage }: WeekViewProps) {
+export function WeekView({
+    initialDate,
+    schedules,
+    employees,
+    vacations,
+    canManage,
+    customerAreas = [],
+    scheduleStatuses = [],
+    workTypes = [],
+    offices = []
+}: WeekViewProps) {
     const router = useRouter();
 
     const start = startOfWeek(initialDate, { weekStartsOn: 0 });
@@ -184,9 +199,6 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                                     <p className={cn("text-lg font-medium text-gray-900", isToday && "text-blue-600")}>
                                         {format(day, 'd')}
                                     </p>
-                                    {canManage && (
-                                        <CalendarCellQuickCreate date={day} employees={employees} />
-                                    )}
                                 </div>
                             );
                         })}
@@ -199,8 +211,24 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                             {days.map(day => (
                                 <div
                                     key={format(day, 'yyyy-MM-dd')}
-                                    className="h-full bg-gray-50/30 pointer-events-auto"
-                                />
+                                    className="h-full bg-gray-50/30 pointer-events-auto group/cell relative"
+                                >
+                                    {/* Quick Create overlay anchored to the cell */}
+                                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto opacity-0 group-hover/cell:opacity-100 transition-opacity">
+                                        {canManage && (
+                                            <div className="w-full h-full flex items-center justify-center">
+                                                <CalendarCellQuickCreate
+                                                    date={day}
+                                                    employees={employees}
+                                                    customerAreas={customerAreas}
+                                                    scheduleStatuses={scheduleStatuses}
+                                                    workTypes={workTypes}
+                                                    offices={offices}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
                             ))}
                         </div>
 
@@ -230,7 +258,8 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                         <div className="relative z-10 grid grid-cols-7 gap-y-2 p-2 pointer-events-none">
                             {weekSchedules.map(block => {
                                 const schedule = block.schedule;
-                                const categoryColor = schedule.category ? (schedule.category as any).color : '#6366f1';
+                                const isCancelled = isCancelledStatus(schedule.scheduleStatus);
+                                const categoryColor = schedule.customerArea ? (schedule.customerArea as any).color : '#6366f1';
 
                                 let timeLabel = '';
                                 if (isSameDay(block.startTime, block.endTime)) {
@@ -252,11 +281,12 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                                             borderLeftWidth: block.startsBeforeWeek ? '1px' : '4px',
                                             borderColor: categoryColor,
                                             backgroundColor: `${categoryColor}10`,
-                                            ...(schedule.status === 'CANCELLED' ? {
+                                            ...(isCancelled ? {
                                                 opacity: 0.6,
                                                 borderStyle: 'dashed',
                                                 backgroundColor: '#f9fafb',
-                                                borderColor: '#d1d5db'
+                                                borderColor: '#d1d5db',
+                                                borderLeftColor: '#9ca3af'
                                             } : {})
                                         }}
                                         role="button"
@@ -274,17 +304,54 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                                             }
                                         }}
                                     >
-                                        <div className={`font-semibold truncate ${schedule.status === 'CANCELLED' ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
-                                            {schedule.title}
+                                        <div className="flex items-center gap-1 overflow-hidden shrink-0">
+                                            <div className={cn("font-semibold truncate", isCancelled ? 'text-gray-500 line-through' : 'text-gray-900')}>
+                                                {schedule.title}
+                                            </div>
+                                            {/* Status Badge */}
+                                            {schedule.scheduleStatus && !isCancelled && (
+                                                <span
+                                                    className="shrink-0 text-[9px] px-1 rounded border"
+                                                    style={{
+                                                        color: (schedule.scheduleStatus as any).color || '#374151',
+                                                        borderColor: (schedule.scheduleStatus as any).color || '#d1d5db',
+                                                        backgroundColor: `${(schedule.scheduleStatus as any).color || '#6b7280'}15`
+                                                    }}>
+                                                    {(schedule.scheduleStatus as any).name}
+                                                </span>
+                                            )}
+                                            {/* Cancelled Marker */}
+                                            {isCancelled && (
+                                                <span className="shrink-0 text-[8px] px-1 rounded border border-gray-300 text-gray-500 bg-gray-100 uppercase tracking-wider">
+                                                    취소
+                                                </span>
+                                            )}
                                         </div>
-                                        <div className={schedule.status === 'CANCELLED' ? 'text-gray-400 mb-1 truncate' : 'text-gray-500 mb-1 truncate'}>
-                                            {schedule.category && (
-                                                <span className="font-medium mr-1" style={{ color: schedule.status === 'CANCELLED' ? 'inherit' : categoryColor }}>
-                                                    [{(schedule.category as any).name}]
+
+                                        <div className={isCancelled ? 'text-gray-400 mt-0.5 shrink-0 truncate' : 'text-slate-700 mt-0.5 shrink-0 truncate'}>
+                                            {schedule.customerArea && (
+                                                <span className="font-medium mr-1" style={{ color: isCancelled ? 'inherit' : categoryColor }}>
+                                                    [{(schedule.customerArea as any).name}]
                                                 </span>
                                             )}
                                             {timeLabel}
                                         </div>
+
+                                        {/* Work Types */}
+                                        {schedule.workTypes && schedule.workTypes.length > 0 && (
+                                            <div className="flex flex-wrap items-center gap-1 mt-1 shrink-0 overflow-hidden">
+                                                {schedule.workTypes.slice(0, 2).map((wt: any) => (
+                                                    <span key={wt.workType.id} className="text-[9px] px-1.5 rounded bg-black/5 border border-black/10 text-gray-600 truncate max-w-[80px]">
+                                                        {wt.workType.name}
+                                                    </span>
+                                                ))}
+                                                {schedule.workTypes.length > 2 && (
+                                                    <span className="text-[9px] px-1 rounded bg-black/5 border border-black/10 text-gray-600">
+                                                        +{schedule.workTypes.length - 2}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
 
                                         {/* Assignments inline/overlap container */}
                                         <div className="flex flex-wrap items-center mt-1 gap-1">

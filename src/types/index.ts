@@ -5,14 +5,16 @@ export type {
     Employee,
     Vacation,
     Role,
-    Category
+    Category,
+    CustomerArea,
+    ScheduleStatus,
+    WorkType
 } from '@/lib/db';
 
 // ============================================
 // API RESPONSE TYPES
 // ============================================
-
-import type { Schedule, Assignment, Employee, Vacation, Role, Category } from '@/lib/db';
+import type { Schedule, Assignment, Employee, Vacation, Role, Category, CustomerArea, ScheduleStatus, WorkType } from '@/lib/db';
 
 // Schedule with assignments included
 export interface ScheduleWithAssignments extends Schedule {
@@ -52,12 +54,18 @@ export type SerializedSchedule = Serialized<Schedule>;
 export type SerializedAssignment = Serialized<Assignment>;
 export type SerializedEmployee = Serialized<Employee>;
 export type SerializedVacation = Serialized<Vacation>;
+export type SerializedCustomerArea = Serialized<CustomerArea>;
+export type SerializedScheduleStatus = Serialized<ScheduleStatus>;
+export type SerializedWorkType = Serialized<WorkType>;
 
 /** Schedule with nested assignments+employee, all dates serialized */
 export type SerializedScheduleWithAssignments = Serialized<
-    Schedule & { 
+    Schedule & {
         assignments: (Assignment & { employee: Employee })[];
         category?: Category | null;
+        customerArea?: CustomerArea | null;
+        scheduleStatus?: ScheduleStatus | null;
+        workTypes?: ({ workType: WorkType })[];
     }
 >;
 

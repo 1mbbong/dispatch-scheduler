@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { format, parseISO } from 'date-fns';
+import { isCancelledStatus } from '@/lib/labels';
 import { SerializedScheduleWithAssignments } from '@/types';
 
 // Timeline constants
@@ -72,7 +73,7 @@ export function DayView({ schedules }: DayViewProps) {
                     const bottom = timeToOffset(end);
                     const height = Math.max(bottom - top, 24); // min height for visibility
 
-                    const isCancelled = schedule.status === 'CANCELLED';
+                    const isCancelled = isCancelledStatus(schedule.scheduleStatus);
                     const assignmentCount = schedule.assignments?.length ?? 0;
 
                     // Simple overlap offset: stagger by index position
@@ -80,36 +81,39 @@ export function DayView({ schedules }: DayViewProps) {
                     const leftOffset = idx * 8;
                     const maxLeft = 40; // cap offset
 
-                    // Determine block colors dynamically using category color
-                    const category = schedule.category as any;
-                    const catColor = category?.color;
-                    
-                    const blockStyles = isCancelled
-                        ? {
-                              backgroundColor: '#f9fafb', // gray-50
-                              borderColor: '#d1d5db', // gray-300
-                              borderStyle: 'dashed',
-                              color: '#6b7280', // gray-500
-                          }
-                        : catColor
-                        ? {
-                              backgroundColor: `${catColor}15`, // extremely light tint
-                              borderColor: catColor,
-                              borderStyle: 'solid',
-                              color: '#111827', // text-gray-900
-                          }
-                        : {
-                              backgroundColor: '#eef2ff', // indigo-50
-                              borderColor: '#6366f1', // indigo-500
-                              borderStyle: 'solid',
-                              color: '#111827',
-                          };
+                    // Determine block colors dynamically using customerArea color
+                    const customerArea = schedule.customerArea;
+                    const catColor = (customerArea as any)?.color;
+
+                    let blockStyles;
+                    if (isCancelled) {
+                        blockStyles = {
+                            backgroundColor: '#f9fafb', // gray-50
+                            borderColor: '#d1d5db', // gray-300
+                            borderStyle: 'dashed',
+                            color: '#6b7280', // gray-500
+                        };
+                    } else if (catColor) {
+                        blockStyles = {
+                            backgroundColor: `${catColor}15`, // extremely light tint
+                            borderColor: catColor,
+                            borderStyle: 'solid',
+                            color: '#111827', // text-gray-900
+                        };
+                    } else {
+                        blockStyles = {
+                            backgroundColor: '#eef2ff', // indigo-50
+                            borderColor: '#6366f1', // indigo-500
+                            borderStyle: 'solid',
+                            color: '#111827',
+                        };
+                    }
 
                     return (
                         <div
                             key={schedule.id}
                             onClick={() => router.push(`/schedules/${schedule.id}`)}
-                            title={`${schedule.title}\n${category ? `Category: ${category.name}\n` : ''}${format(start, 'HH:mm')}–${format(end, 'HH:mm')}`}
+                            title={`${schedule.title}\n${customerArea ? `Area: ${customerArea.name}\n` : ''}${format(start, 'HH:mm')}–${format(end, 'HH:mm')}`}
                             className={`absolute rounded-md px-2.5 py-1.5 text-xs cursor-pointer transition-shadow hover:shadow-md overflow-hidden border-l-4 ${isCancelled ? 'opacity-60' : ''}`}
                             style={{
                                 top,
@@ -122,21 +126,55 @@ export function DayView({ schedules }: DayViewProps) {
                                 borderStyle: blockStyles.borderStyle,
                             }}
                         >
-                            <div className={`font-semibold truncate`} style={{ color: isCancelled ? '#6b7280' : blockStyles.color, textDecoration: isCancelled ? 'line-through' : 'none' }}>
-                                {schedule.title}
+                            <div className="flex items-start justify-between gap-1 overflow-hidden" style={{ color: isCancelled ? '#6b7280' : blockStyles.color, textDecoration: isCancelled ? 'line-through' : 'none' }}>
+                                <div className={`font-semibold truncate flex-1`}>
+                                    {schedule.title}
+                                </div>
+                                {/* Status badge */}
+                                {schedule.scheduleStatus && !isCancelled && (
+                                    <span
+                                        className="shrink-0 text-[9px] px-1 rounded border"
+                                        style={{
+                                            color: (schedule.scheduleStatus as any).color || '#374151',
+                                            borderColor: (schedule.scheduleStatus as any).color || '#d1d5db',
+                                            backgroundColor: `${(schedule.scheduleStatus as any).color || '#6b7280'}15`,
+                                            textDecoration: 'none'
+                                        }}>
+                                        {(schedule.scheduleStatus as any).name}
+                                    </span>
+                                )}
                             </div>
-                            <div className={`${isCancelled ? 'text-gray-400' : 'text-gray-500'}`}>
-                                {format(start, 'HH:mm')}–{format(end, 'HH:mm')}
+                            <div className={`${isCancelled ? 'text-gray-400' : 'text-gray-500'} flex items-center flex-wrap gap-1 mt-0.5`}>
+                                <span>{format(start, 'HH:mm')}–{format(end, 'HH:mm')}</span>
                                 {assignmentCount > 0 && (
-                                    <span className="ml-1.5 text-indigo-600 font-medium">
+                                    <span className="text-indigo-600 font-medium">
                                         · {assignmentCount} ppl
                                     </span>
                                 )}
                             </div>
+
+                            {/* Work Types */}
+                            {schedule.workTypes && schedule.workTypes.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1 mt-1 shrink-0 overflow-hidden">
+                                    {schedule.workTypes.slice(0, 2).map((wt: any) => (
+                                        <span key={wt.workType.id} className="text-[9px] px-1.5 rounded bg-black/5 border border-black/10 text-gray-600 truncate max-w-[80px]">
+                                            {wt.workType.name}
+                                        </span>
+                                    ))}
+                                    {schedule.workTypes.length > 2 && (
+                                        <span className="text-[9px] px-1 rounded bg-black/5 border border-black/10 text-gray-600">
+                                            +{schedule.workTypes.length - 2}
+                                        </span>
+                                    )}
+                                </div>
+                            )}
+
                             {isCancelled && (
-                                <span className="text-[10px] text-gray-400 uppercase tracking-wider">
-                                    cancelled
-                                </span>
+                                <div className="mt-0.5">
+                                    <span className="inline-block text-[9px] px-1 rounded border border-gray-300 text-gray-500 bg-gray-100 uppercase tracking-wider">
+                                        취소
+                                    </span>
+                                </div>
                             )}
                         </div>
                     );

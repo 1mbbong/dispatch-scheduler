@@ -38,6 +38,12 @@ export async function GET(request: NextRequest) {
                 where,
                 include: {
                     category: true,
+                    customerArea: true,
+                    scheduleStatus: true,
+                    workTypes: {
+                        include: { workType: true }
+                    },
+                    office: true,
                     assignments: {
                         include: {
                             employee: {
@@ -79,6 +85,9 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const data = createScheduleSchema.parse(body);
 
+        const workLocationType = data.workLocationType;
+        const officeId = workLocationType === 'OFFICE' ? data.officeId : null;
+
         const schedule = await prisma.schedule.create({
             data: {
                 tenantId: auth.tenantId,
@@ -87,9 +96,26 @@ export async function POST(request: NextRequest) {
                 startTime: data.startTime,
                 endTime: data.endTime,
                 categoryId: data.categoryId,
+                customerAreaId: data.customerAreaId,
+                statusId: data.statusId,
+                workLocationType,
+                officeId,
+                ...(data.workTypeIds && data.workTypeIds.length > 0 && {
+                    workTypes: {
+                        createMany: {
+                            data: data.workTypeIds.map((id) => ({ workTypeId: id })),
+                        }
+                    }
+                }),
             },
             include: {
                 category: true,
+                customerArea: true,
+                scheduleStatus: true,
+                workTypes: {
+                    include: { workType: true }
+                },
+                office: true,
                 assignments: {
                     include: {
                         employee: {
@@ -113,6 +139,11 @@ export async function POST(request: NextRequest) {
                 startTime: schedule.startTime,
                 endTime: schedule.endTime,
                 categoryId: schedule.categoryId,
+                customerAreaId: schedule.customerAreaId,
+                statusId: schedule.statusId,
+                workTypeIds: data.workTypeIds || [],
+                workLocationType: schedule.workLocationType,
+                officeId: schedule.officeId,
             }),
         });
 

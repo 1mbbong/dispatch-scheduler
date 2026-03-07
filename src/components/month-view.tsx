@@ -15,8 +15,10 @@ import {
     parseISO
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { useMemo, useState, useEffect } from 'react';
-import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee } from '@/types';
+import { isCancelledStatus } from '@/lib/labels';
+import { useMemo, useState, useEffect, useRef } from 'react';
+import { useToast } from '@/components/ui/toast';
+import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee, SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
 import { CalendarCellQuickCreate } from '@/components/calendar-cell-quick-create';
 import { SelectionActionModal } from '@/components/selection-action-modal';
 
@@ -26,15 +28,43 @@ interface MonthViewProps {
     employees: SerializedEmployeeWithStats[];
     vacations: SerializedVacationWithEmployee[];
     canManage: boolean;
+    rescheduleSnapshots?: Record<string, { prevStartTime: string, prevEndTime: string }>;
+    customerAreas?: SerializedCustomerArea[];
+    scheduleStatuses?: SerializedScheduleStatus[];
+    workTypes?: SerializedWorkType[];
+    offices?: { id: string, name: string }[];
 }
 
-export function MonthView({ initialDate, schedules, employees, vacations, canManage }: MonthViewProps) {
+const LANE_CAP_ENABLED = false; // future tenant setting hook
+const LANE_CAP_MAX = 3;
+
+export function MonthView({
+    // ...
+    // other props down below
+
+    initialDate,
+    schedules,
+    employees,
+    vacations,
+    canManage,
+    rescheduleSnapshots = {},
+    customerAreas = [],
+    scheduleStatuses = [],
+    workTypes = [],
+    offices = []
+}: MonthViewProps) {
     const router = useRouter();
 
     const [selectionStart, setSelectionStart] = useState<Date | null>(null);
     const [selectionEnd, setSelectionEnd] = useState<Date | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [showSelectionAction, setShowSelectionAction] = useState(false);
+
+    // Drag-and-drop reschedule state
+    const [draggedSchedule, setDraggedSchedule] = useState<{ schedule: SerializedScheduleWithAssignments; originalStart: Date; originalEnd: Date } | null>(null);
+    const [confirmReschedule, setConfirmReschedule] = useState<{ schedule: SerializedScheduleWithAssignments; newStart: Date; newEnd: Date } | null>(null);
+    const [isRescheduling, setIsRescheduling] = useState(false);
+    const toast = useToast();
 
     const monthStart = startOfMonth(initialDate);
     const monthEnd = endOfMonth(initialDate);
@@ -138,6 +168,69 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
         });
         return map;
     }, [schedules, days]);
+
+    // Pre-calculate shadow blocks per week for rescheduled items
+    const shadowsByWeek = useMemo(() => {
+        if (!rescheduleSnapshots || Object.keys(rescheduleSnapshots).length === 0) {
+            return weeks.map(() => []);
+        }
+
+        return weeks.map((weekDays) => {
+            const weekStartLocal = new Date(weekDays[0]);
+            weekStartLocal.setHours(0, 0, 0, 0);
+            const weekEndLocal = new Date(weekDays[6]);
+            weekEndLocal.setHours(23, 59, 59, 999);
+
+            const blocks: any[] = [];
+            const uniqueSchedules = new Map<string, typeof schedules[0]>();
+            schedules.forEach(s => uniqueSchedules.set(s.id, s));
+
+            for (const schedule of Array.from(uniqueSchedules.values())) {
+                const snapshot = rescheduleSnapshots[schedule.id];
+                if (!snapshot) continue;
+
+                const prevStart = parseISO(snapshot.prevStartTime);
+                const prevEnd = parseISO(snapshot.prevEndTime);
+
+                // Intersect with this week row?
+                if (prevStart <= weekEndLocal && prevEnd >= weekStartLocal) {
+                    let startIndex = -1;
+                    let endIndex = -1;
+
+                    for (let i = 0; i < 7; i++) {
+                        const dayStart = new Date(weekDays[i]); dayStart.setHours(0, 0, 0, 0);
+                        const dayEnd = new Date(weekDays[i]); dayEnd.setHours(23, 59, 59, 999);
+
+                        if (prevStart <= dayEnd && prevEnd >= dayStart) {
+                            if (startIndex === -1) startIndex = i;
+                            endIndex = i;
+                        }
+                    }
+
+                    if (startIndex !== -1) {
+                        blocks.push({
+                            schedule,
+                            gridColumnStart: startIndex + 1,
+                            gridColumnEnd: endIndex + 2,
+                            startsBeforeWeek: prevStart < weekStartLocal,
+                            endsAfterWeek: prevEnd > weekEndLocal,
+                            startTime: prevStart,
+                            endTime: prevEnd
+                        });
+                    }
+                }
+            }
+
+            blocks.sort((a, b) => {
+                if (a.startTime.getTime() !== b.startTime.getTime()) {
+                    return a.startTime.getTime() - b.startTime.getTime();
+                }
+                return (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
+            });
+
+            return blocks;
+        });
+    }, [weeks, schedules, rescheduleSnapshots]);
 
     // Pre-calculate vacations per week for the spanning overlay
     const vacationsByWeek = useMemo(() => {
@@ -244,6 +337,79 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
         }
     };
 
+    // Drag and drop handlers
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+        // Prevent drop if range selection is active
+        if (isDragging || !canManage) return;
+        e.preventDefault(); // allow drop
+    };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
+        if (isDragging || !canManage || !draggedSchedule) return;
+        e.preventDefault();
+
+        const { schedule, originalStart, originalEnd } = draggedSchedule;
+
+        // Calculate the exact duration in ms
+        const durationMs = originalEnd.getTime() - originalStart.getTime();
+
+        // New start time preserves original hours/minutes
+        const newStart = new Date(day);
+        newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+
+        // New end time preserves duration
+        const newEnd = new Date(newStart.getTime() + durationMs);
+
+        // Only prompt if the day actually changed
+        if (!isSameDay(newStart, originalStart)) {
+            setConfirmReschedule({ schedule, newStart, newEnd });
+        }
+
+        setDraggedSchedule(null); // Clear drag state
+    };
+
+    const executeReschedule = async () => {
+        if (!confirmReschedule) return;
+        setIsRescheduling(true);
+        try {
+            const res = await fetch(`/api/schedules/${confirmReschedule.schedule.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    startTime: confirmReschedule.newStart.toISOString(),
+                    endTime: confirmReschedule.newEnd.toISOString(),
+                }),
+            });
+
+            if (!res.ok) {
+                const data = await res.json();
+                // Treat 409 as generic server conflict and show returned error
+                toast.error(`Error: ${data.error || 'Conflict detected or update failed'}`);
+                setConfirmReschedule(null);
+                return;
+            }
+
+            toast.success('Schedule updated.');
+            setConfirmReschedule(null);
+            router.refresh();
+        } catch (err: any) {
+            toast.error(err.message || 'Error updating schedule');
+            setConfirmReschedule(null);
+        } finally {
+            setIsRescheduling(false);
+        }
+    };
+
+    // Scroll lock for confirm modal
+    useEffect(() => {
+        if (!confirmReschedule) return;
+        const originalStyle = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = originalStyle;
+        };
+    }, [confirmReschedule]);
+
     const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
     return (
@@ -290,14 +456,25 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
             {/* Calendar Grid */}
             <div className="flex-1 min-h-0 flex flex-col">
                 {weeks.map((weekDays, weekIndex) => {
-                    const weekBlocks = schedulesByWeek[weekIndex];
+                    const weekBlocks = schedulesByWeek[weekIndex].map(b => ({ ...b, isGhost: false }));
+                    const shadowBlocks = shadowsByWeek[weekIndex].map(b => ({ ...b, isGhost: true }));
+
+                    const combinedBlocks = [...shadowBlocks, ...weekBlocks];
+                    combinedBlocks.sort((a, b) => {
+                        if (a.startTime.getTime() !== b.startTime.getTime()) {
+                            return a.startTime.getTime() - b.startTime.getTime();
+                        }
+                        const durationDiff = (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
+                        if (durationDiff !== 0) return durationDiff;
+                        return a.isGhost ? -1 : 1;
+                    });
 
                     // Group blocks into lanes to calculate over-stacking per row
-                    const maxLanes = 3;
+                    const maxLanes = LANE_CAP_ENABLED ? LANE_CAP_MAX : 999;
                     const lanes: any[][] = [];
                     const overflowCounts = new Array(7).fill(0);
 
-                    weekBlocks.forEach(block => {
+                    combinedBlocks.forEach(block => {
                         let placed = false;
                         for (let l = 0; l < maxLanes; l++) {
                             if (!lanes[l]) lanes[l] = [];
@@ -322,8 +499,14 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
                     // Flatten back the successfully placed visible blocks
                     const visibleBlocks = lanes.flat();
 
+                    const rowMinHeight = LANE_CAP_ENABLED ? undefined : Math.max(100, lanes.length * 24 + 40);
+
                     return (
-                        <div key={weekIndex} className="relative flex-1 grid grid-cols-7 border-b group">
+                        <div
+                            key={weekIndex}
+                            className="relative flex-1 grid grid-cols-7 border-b group"
+                            style={{ minHeight: rowMinHeight ? `${rowMinHeight}px` : undefined }}
+                        >
                             {/* 1) Background Day Cells (Interactive) */}
                             {weekDays.map((day, colIndex) => {
                                 const dateKey = format(day, 'yyyy-MM-dd');
@@ -347,8 +530,10 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
                                         }}
                                         onMouseEnter={() => handleCellMouseEnter(day)}
                                         onMouseUp={() => handleCellMouseUp(day)}
+                                        onDragOver={handleDragOver}
+                                        onDrop={(e) => handleDrop(e, day)}
                                         className={cn(
-                                            "relative min-h-[100px] p-2 border-r flex flex-col transition-colors cursor-cell",
+                                            "relative min-h-[100px] p-2 border-r flex flex-col transition-colors cursor-cell select-none",
                                             isSelected ? "bg-indigo-50/60" : "hover:bg-gray-50",
                                             !isSelected && !isCurrentMonth && "bg-gray-50/50 text-gray-400",
                                             !isSelected && isToday && "bg-blue-50/30",
@@ -361,7 +546,7 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
                                                 "text-sm font-medium h-6 w-6 flex items-center justify-center rounded-full transition-colors",
                                                 isToday && !isSelected && "bg-blue-600 text-white",
                                                 isSelected && isToday && "bg-indigo-600 text-white"
-                                            )}>
+                                            )} draggable={false}>
                                                 {format(day, dateFormat)}
                                             </span>
                                             {totalSchedulesCount > 0 && (
@@ -374,7 +559,14 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
                                         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto opacity-0 group-hover/cell:opacity-100 transition-opacity">
                                             {canManage && !isDragging && !showSelectionAction && (
                                                 <div className="group/cell w-full h-full flex items-center justify-center">
-                                                    <CalendarCellQuickCreate date={day} employees={employees} />
+                                                    <CalendarCellQuickCreate
+                                                        date={day}
+                                                        employees={employees}
+                                                        customerAreas={customerAreas}
+                                                        scheduleStatuses={scheduleStatuses}
+                                                        workTypes={workTypes}
+                                                        offices={offices}
+                                                    />
                                                 </div>
                                             )}
                                         </div>
@@ -405,30 +597,64 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
                                 </div>
                             </div>
 
-                            {/* 3) Foreground Spanning Overlay (z-10) */}
+                            {/* 3) Unified Spanning Overlay (z-10) for both Ghosts and Live Schedules */}
                             <div className="absolute inset-0 pt-8 pb-1 px-1 pointer-events-none">
                                 <div className="grid grid-cols-7 gap-y-1 h-full content-start">
                                     {visibleBlocks.map((block, idx) => {
                                         const schedule = block.schedule;
-                                        const isCancelled = schedule.status === 'CANCELLED';
-                                        const catColor = schedule.category ? (schedule.category as any).color : '#4f46e5';
+
+                                        if (block.isGhost) {
+                                            return (
+                                                <div
+                                                    key={`shadow-${schedule.id}-${weekIndex}-${idx}`}
+                                                    className={cn(
+                                                        "mx-0.5 px-1.5 py-0.5 text-[10px] sm:text-xs truncate rounded cursor-pointer pointer-events-auto transition-opacity z-10 focus:outline-none focus:ring-2 focus:ring-indigo-500 select-none",
+                                                        "opacity-80 border border-dashed border-gray-400 bg-gray-50/60 hover:bg-gray-100 text-gray-800",
+                                                        block.startsBeforeWeek ? "rounded-l-none border-l-0 ml-0" : "rounded-l",
+                                                        block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r"
+                                                    )}
+                                                    style={{
+                                                        gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
+                                                    }}
+                                                    title={`Rescheduled: ${schedule.title} (Click to see History)`}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        router.push(`/schedules/${schedule.id}?tab=history`);
+                                                    }}
+                                                >
+                                                    <div className="font-medium truncate flex items-center gap-1 text-slate-800">
+                                                        <span className="shrink-0 text-[10px] uppercase font-bold tracking-wider text-slate-500 px-1 border border-slate-300 rounded-sm bg-slate-100">RESCHEDULED</span>
+                                                        <span>{schedule.title}</span>
+                                                    </div>
+                                                    <div className="text-slate-600 truncate mt-0.5">
+                                                        {format(block.startTime, 'MMM d, HH:mm')} - {format(block.endTime, 'HH:mm')}
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
+
+                                        const isCancelled = isCancelledStatus(schedule.scheduleStatus);
+                                        const catColor = schedule.customerArea ? (schedule.customerArea as any).color : '#4f46e5';
 
                                         return (
                                             <div
                                                 key={`${schedule.id}-${weekIndex}-${idx}`}
                                                 className={cn(
-                                                    "mx-0.5 px-1.5 py-0.5 text-[10px] sm:text-xs truncate rounded cursor-pointer pointer-events-auto transition-opacity z-10 focus:outline-none focus:ring-2 focus:ring-indigo-500",
-                                                    isCancelled ? 'opacity-60 line-through' : 'hover:opacity-90',
+                                                    "mx-0.5 px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-xs truncate rounded cursor-pointer pointer-events-auto transition-opacity z-10 focus:outline-none focus:ring-2 focus:ring-indigo-500 select-none",
+                                                    isCancelled ? 'opacity-70 border-dashed border bg-gray-50/50' : 'hover:opacity-90',
                                                     block.startsBeforeWeek ? "rounded-l-none border-l-0 ml-0" : "rounded-l border-l-2",
                                                     block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r"
                                                 )}
-                                                style={{
+                                                style={isCancelled ? {
                                                     gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
-                                                    borderColor: isCancelled ? '#d1d5db' : catColor,
-                                                    backgroundColor: isCancelled ? '#f9fafb' : `${catColor}15`,
-                                                    color: isCancelled ? '#6b7280' : catColor
+                                                    borderColor: '#9ca3af',
+                                                } : {
+                                                    gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
+                                                    borderColor: catColor,
+                                                    backgroundColor: `${catColor}15`,
+                                                    color: catColor
                                                 }}
-                                                title={`${schedule.title}${schedule.category ? ` (${(schedule.category as any).name})` : ''}`}
+                                                title={`${schedule.title}${schedule.customerArea ? ` (${(schedule.customerArea as any).name})` : ''}`}
                                                 role="button"
                                                 tabIndex={0}
                                                 aria-label={`Schedule: ${schedule.title}, ${format(block.startTime, 'MMM d')} to ${format(block.endTime, 'MMM d')}`}
@@ -440,11 +666,78 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
                                                     if (e.key === 'Enter') {
                                                         e.preventDefault();
                                                         e.stopPropagation();
-                                                        router.push(`/schedules/${schedule.id}`);
                                                     }
                                                 }}
                                             >
-                                                {schedule.title}
+                                                <div className="flex items-center gap-1 overflow-hidden w-full h-full">
+                                                    <div className={cn("truncate flex-1 font-medium", isCancelled ? "text-gray-500 line-through" : "text-slate-800")} draggable={false}>
+                                                        {schedule.title}
+                                                    </div>
+
+                                                    {/* Status Badge */}
+                                                    {schedule.scheduleStatus && !isCancelled && (
+                                                        <span
+                                                            className="shrink-0 text-[9px] px-1 rounded border"
+                                                            style={{
+                                                                color: (schedule.scheduleStatus as any).color || '#374151',
+                                                                borderColor: (schedule.scheduleStatus as any).color || '#d1d5db',
+                                                                backgroundColor: `${(schedule.scheduleStatus as any).color || '#6b7280'}15`
+                                                            }}>
+                                                            {(schedule.scheduleStatus as any).name}
+                                                        </span>
+                                                    )}
+
+                                                    {/* Cancelled Marker */}
+                                                    {isCancelled && (
+                                                        <span className="shrink-0 text-[8px] px-1 rounded border border-gray-300 text-gray-500 bg-gray-100 uppercase tracking-wider">
+                                                            취소
+                                                        </span>
+                                                    )}
+
+                                                    {/* Work Types */}
+                                                    {schedule.workTypes && schedule.workTypes.length > 0 && (
+                                                        <div className="hidden xl:flex items-center gap-0.5 shrink-0">
+                                                            {schedule.workTypes.slice(0, 1).map((wt: any) => (
+                                                                <span key={wt.workType.id} className="text-[8px] px-1 rounded bg-black/5 border border-black/10 text-gray-600 truncate max-w-[60px]">
+                                                                    {wt.workType.name}
+                                                                </span>
+                                                            ))}
+                                                            {schedule.workTypes.length > 1 && (
+                                                                <span className="text-[8px] px-1 rounded bg-black/5 border border-black/10 text-gray-600">
+                                                                    +{schedule.workTypes.length - 1}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Drag Handle */}
+                                                    {canManage && (
+                                                        <div
+                                                            draggable={true}
+                                                            onDragStart={(e) => {
+                                                                e.stopPropagation();
+                                                                e.dataTransfer.effectAllowed = 'move';
+                                                                e.dataTransfer.setData('text/plain', schedule.id);
+
+                                                                const img = new Image();
+                                                                img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                                                                e.dataTransfer.setDragImage(img, 0, 0);
+
+                                                                setDraggedSchedule({
+                                                                    schedule: schedule,
+                                                                    originalStart: parseISO(schedule.startTime),
+                                                                    originalEnd: parseISO(schedule.endTime)
+                                                                });
+                                                            }}
+                                                            onDragEnd={() => setDraggedSchedule(null)}
+                                                            className="ml-auto flex items-center justify-center w-3 cursor-grab hover:bg-black/10 rounded-r opacity-50 hover:opacity-100"
+                                                            title="Drag to reschedule"
+                                                            aria-label="Drag to reschedule"
+                                                        >
+                                                            <span className="text-[10px] select-none leading-none tracking-tighter" style={{ marginTop: '-2px' }}>⠿</span>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
                                         );
                                     })}
@@ -482,21 +775,91 @@ export function MonthView({ initialDate, schedules, employees, vacations, canMan
                         </div>
                     );
                 })}
-            </div>
+            </div >
 
             {/* Range Selection Action Modal */}
-            {showSelectionAction && rangeStart && rangeEnd && (
-                <SelectionActionModal
-                    startDate={rangeStart}
-                    endDate={rangeEnd}
-                    employees={employees}
-                    onClose={() => {
-                        setShowSelectionAction(false);
-                        setSelectionStart(null);
-                        setSelectionEnd(null);
-                    }}
-                />
-            )}
-        </div>
+            {
+                showSelectionAction && rangeStart && rangeEnd && (
+                    <SelectionActionModal
+                        startDate={rangeStart}
+                        endDate={rangeEnd}
+                        employees={employees}
+                        onClose={() => {
+                            setShowSelectionAction(false);
+                            setSelectionStart(null);
+                            setSelectionEnd(null);
+                        }}
+                        customerAreas={customerAreas}
+                        scheduleStatuses={scheduleStatuses}
+                        workTypes={workTypes}
+                        offices={offices}
+                    />
+                )
+            }
+
+            {/* Drag and Drop Confirm Modal */}
+            {
+                confirmReschedule && (
+                    <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="confirm-modal-title" role="dialog" aria-modal="true">
+                        <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                            <div className="fixed inset-0 z-40 bg-transparent backdrop-blur-sm backdrop-brightness-90 transition-all" aria-hidden="true" onClick={() => !isRescheduling && setConfirmReschedule(null)}></div>
+                            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                            <div className="relative z-50 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                                <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                    <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="confirm-modal-title">
+                                        Confirm Reschedule
+                                    </h3>
+                                    <div className="mt-2 text-sm text-gray-600 space-y-3">
+                                        <p>Are you sure you want to move <strong>{confirmReschedule.schedule.title}</strong>?</p>
+                                        <div className="bg-gray-50 rounded p-3 border">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className="text-gray-500 w-12">From:</span>
+                                                <span className="font-medium text-red-600 line-through">
+                                                    {format(parseISO(confirmReschedule.schedule.startTime), 'MMM d, yyyy HH:mm')} - {format(parseISO(confirmReschedule.schedule.endTime), 'HH:mm')}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-gray-500 w-12">To:</span>
+                                                <span className="font-medium text-green-700">
+                                                    {format(confirmReschedule.newStart, 'MMM d, yyyy HH:mm')} - {format(confirmReschedule.newEnd, 'HH:mm')}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="rounded-md bg-amber-50 p-3 border border-amber-200 mt-4">
+                                            <div className="flex">
+                                                <div className="ml-3">
+                                                    <h3 className="text-sm font-medium text-amber-800">Note</h3>
+                                                    <div className="mt-1 text-sm text-amber-700">
+                                                        Per-day assignments are NOT automatically shifted. You will need to re-verify assignments manually after moving.
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t">
+                                    <button
+                                        type="button"
+                                        onClick={executeReschedule}
+                                        disabled={isRescheduling}
+                                        className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
+                                    >
+                                        {isRescheduling ? 'Saving...' : 'Confirm'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => !isRescheduling && setConfirmReschedule(null)}
+                                        disabled={isRescheduling}
+                                        className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+        </div >
     );
 }

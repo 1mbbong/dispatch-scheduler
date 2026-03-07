@@ -1,20 +1,22 @@
 'use client';
 
 import { useState } from 'react';
-import { SerializedEmployeeWithStats } from '@/types';
+import { SerializedEmployeeWithStats, SerializedCustomerArea } from '@/types';
 import { useToast } from '@/components/ui/toast';
 
 interface EmployeeFormProps {
-    employee?: SerializedEmployeeWithStats | null;
+    employee?: SerializedEmployeeWithStats | null | any;
+    customerAreas: SerializedCustomerArea[];
     onSuccess: () => void;
     onCancel: () => void;
 }
 
-export function EmployeeForm({ employee, onSuccess, onCancel }: EmployeeFormProps) {
+export function EmployeeForm({ employee, customerAreas, onSuccess, onCancel }: EmployeeFormProps) {
     const toast = useToast();
     const [name, setName] = useState(employee?.name || '');
     const [email, setEmail] = useState(employee?.email || '');
     const [phone, setPhone] = useState(employee?.phone || '');
+    const [customerAreaId, setCustomerAreaId] = useState(employee?.customerAreaId || '');
     const [department, setDepartment] = useState(employee?.department || '');
     const [team, setTeam] = useState(employee?.team || '');
     const [subTeam, setSubTeam] = useState(employee?.subTeam || '');
@@ -37,10 +39,11 @@ export function EmployeeForm({ employee, onSuccess, onCancel }: EmployeeFormProp
             const res = await fetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    name, 
-                    email, 
+                body: JSON.stringify({
+                    name,
+                    email,
                     phone,
+                    customerAreaId: customerAreaId || null,
                     department,
                     team,
                     subTeam,
@@ -102,6 +105,23 @@ export function EmployeeForm({ employee, onSuccess, onCancel }: EmployeeFormProp
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                 />
+            </div>
+
+            <div>
+                <label htmlFor="customerAreaId" className="block text-sm font-medium text-gray-700"> Customer Area <span className="text-gray-400 font-normal">(Optional)</span></label>
+                <select
+                    id="customerAreaId"
+                    className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                    value={customerAreaId}
+                    onChange={(e) => setCustomerAreaId(e.target.value)}
+                >
+                    <option value="">-- No Customer Area --</option>
+                    {customerAreas.map(ca => (
+                        <option key={ca.id} value={ca.id}>
+                            {ca.name}
+                        </option>
+                    ))}
+                </select>
             </div>
 
             <div className="grid grid-cols-2 gap-4">

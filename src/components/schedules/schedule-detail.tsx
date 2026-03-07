@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats } from '@/types';
+import { useToast } from '@/components/ui/toast';
+import { SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
 import { format, parseISO, eachDayOfInterval, isSameDay } from 'date-fns';
 import { ScheduleForm } from '@/components/schedules/schedule-form';
-import { useToast } from '@/components/ui/toast';
 
 interface ScheduleDetailProps {
     schedule: SerializedScheduleWithAssignments;
@@ -16,9 +17,14 @@ interface ScheduleDetailProps {
     };
     categoryLabel?: string;
     canManage: boolean;
+    auditLogs: any[];
+    customerAreas?: SerializedCustomerArea[];
+    scheduleStatuses?: SerializedScheduleStatus[];
+    workTypes?: SerializedWorkType[];
+    offices?: { id: string, name: string }[];
 }
 
-export function ScheduleDetail({ schedule, employees, overlappingEvents, categoryLabel = 'Category', canManage }: ScheduleDetailProps) {
+export function ScheduleDetail({ schedule, employees, overlappingEvents, categoryLabel = 'Category', canManage, auditLogs, customerAreas = [], scheduleStatuses = [], workTypes = [], offices = [] }: ScheduleDetailProps) {
     const router = useRouter();
     const toast = useToast();
     const startTime = parseISO(schedule.startTime);
@@ -32,6 +38,45 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
     const [error, setError] = useState<any>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isTogglingStatus, setIsTogglingStatus] = useState(false);
+    const [isDirty, setIsDirty] = useState(false);
+    const searchParams = useSearchParams();
+    const initialTab = searchParams.get('tab') === 'history' ? 'HISTORY' : 'DETAILS';
+    const [activeTab, setActiveTab] = useState<'DETAILS' | 'HISTORY'>(initialTab);
+
+    const requestClose = () => {
+        if (isDirty) {
+            if (confirm('저장되지 않은 변경사항이 있습니다. 닫으면 내용이 사라집니다. Discard 하시겠습니까?')) {
+                setIsEditModalOpen(false);
+                setIsDirty(false);
+            }
+        } else {
+            setIsEditModalOpen(false);
+        }
+    };
+
+    const requestCloseRef = useRef(requestClose);
+    useEffect(() => {
+        requestCloseRef.current = requestClose;
+    }, [requestClose]);
+
+    useEffect(() => {
+        if (!isEditModalOpen) return;
+
+        const originalStyle = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                requestCloseRef.current();
+            }
+        };
+        document.addEventListener('keydown', handleKeyDown, true);
+
+        return () => {
+            document.body.style.overflow = originalStyle;
+            document.removeEventListener('keydown', handleKeyDown, true);
+        };
+    }, [isEditModalOpen]);
 
     // Filter out already assigned employees FOR THE SELECTED DATE
     const assignedEmployeeIdsForSelectedDate = new Set(
@@ -48,16 +93,16 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
 
         if (overlappingEvents) {
             // Check vacations
-            hasVacation = overlappingEvents.vacations.some(v => 
-                v.employeeId === employeeId && 
-                parseISO(v.startDate) <= day && 
+            hasVacation = overlappingEvents.vacations.some(v =>
+                v.employeeId === employeeId &&
+                parseISO(v.startDate) <= day &&
                 parseISO(v.endDate) >= day
             );
-            
+
             // Check other schedules
-            const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
-            const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
-            hasOverlap = overlappingEvents.schedules.some(s => 
+            const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
+            const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
+            hasOverlap = overlappingEvents.schedules.some(s =>
                 s.assignments.some((a: any) => a.employeeId === employeeId) &&
                 parseISO(s.startTime) < dayEnd &&
                 parseISO(s.endTime) > dayStart
@@ -119,6 +164,7 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
 
     const handleEditSuccess = () => {
         setIsEditModalOpen(false);
+        setIsDirty(false);
         router.refresh();
     };
 
@@ -231,12 +277,12 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
                                 </span>
                                 {/* Render Category Badge if exists */}
                                 {schedule.category && (
-                                    <span 
+                                    <span
                                         className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border"
-                                        style={{ 
+                                        style={{
                                             backgroundColor: `${schedule.category.color}15`, // extremely light tint
                                             borderColor: `${schedule.category.color}40`,
-                                            color: schedule.category.color 
+                                            color: schedule.category.color
                                         }}
                                         title={`${categoryLabel}: ${schedule.category.name}`}
                                     >
@@ -284,101 +330,217 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
                             </p>
                         </div>
                     )}
+
+                    {/* Tabs */}
+                    <div className="mt-6 border-b border-gray-200">
+                        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+                            <button
+                                onClick={() => setActiveTab('DETAILS')}
+                                className={`whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'DETAILS'
+                                    ? 'border-indigo-500 text-indigo-600'
+                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                    }`}
+                            >
+                                Assignments
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('HISTORY')}
+                                className={`whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'HISTORY'
+                                    ? 'border-indigo-500 text-indigo-600'
+                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                    }`}
+                            >
+                                History
+                            </button>
+                        </nav>
+                    </div>
                 </div>
 
-                {/* Assignments List */}
-                <div className="bg-white shadow rounded-lg overflow-hidden border">
-                    <div className="px-4 py-5 sm:px-6 flex justify-between items-center bg-gray-50">
-                        <h3 className="text-lg leading-6 font-medium text-gray-900">
-                            Assigned Employees
-                        </h3>
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                            {schedule.assignments.length} / {employees.length}
-                        </span>
-                    </div>
+                {activeTab === 'DETAILS' && (
+                    <div className="bg-white shadow rounded-lg overflow-hidden border">
+                        <div className="px-4 py-5 sm:px-6 flex justify-between items-center bg-gray-50">
+                            <h3 className="text-lg leading-6 font-medium text-gray-900">
+                                Assigned Employees
+                            </h3>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                {schedule.assignments.length} / {employees.length}
+                            </span>
+                        </div>
 
-                    {schedule.assignments.length === 0 ? (
-                        <div className="px-4 py-8 text-sm text-gray-500 text-center border-t">No employees assigned yet.</div>
-                    ) : (
-                        <div className="divide-y divide-gray-200">
-                            {scheduleDays.map((day, idx) => (
-                                <div key={day.toISOString()}>
-                                    {scheduleDays.length > 1 && (
-                                        <div className="bg-gray-100 px-4 py-2 border-t border-b text-sm font-semibold text-gray-700">
-                                            {format(day, 'MMM d (EEE)')}
-                                        </div>
-                                    )}
-                                    <ul className="divide-y divide-gray-100">
-                                        {schedule.assignments
-                                            .filter((a: any) => isSameDay(parseISO(a.date), day))
-                                            .map((assignment) => {
-                                            const { hasVacation, hasOverlap } = getEmployeeHintsForDay(assignment.employeeId, day);
-                                            
-                                            // Ensure assignment.employee exists
-                                            const emp = assignment.employee;
-                                            
-                                            return (
-                                                <li key={`${day.toISOString()}-${assignment.id}`} className="px-4 py-4 flex items-center justify-between hover:bg-gray-50">
-                                                    <div className="flex items-center">
-                                                        <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold mr-3">
-                                                            {emp?.name ? emp.name.charAt(0) : '?'}
-                                                        </div>
+                        {schedule.assignments.length === 0 ? (
+                            <div className="px-4 py-8 text-sm text-gray-500 text-center border-t">No employees assigned yet.</div>
+                        ) : (
+                            <div className="divide-y divide-gray-200">
+                                {scheduleDays.map((day, idx) => (
+                                    <div key={day.toISOString()}>
+                                        {scheduleDays.length > 1 && (
+                                            <div className="bg-gray-100 px-4 py-2 border-t border-b text-sm font-semibold text-gray-700">
+                                                {format(day, 'MMM d (EEE)')}
+                                            </div>
+                                        )}
+                                        <ul className="divide-y divide-gray-100">
+                                            {schedule.assignments
+                                                .filter((a: any) => isSameDay(parseISO(a.date), day))
+                                                .map((assignment) => {
+                                                    const { hasVacation, hasOverlap } = getEmployeeHintsForDay(assignment.employeeId, day);
+
+                                                    // Ensure assignment.employee exists
+                                                    const emp = assignment.employee;
+
+                                                    return (
+                                                        <li key={`${day.toISOString()}-${assignment.id}`} className="px-4 py-4 flex items-center justify-between hover:bg-gray-50">
+                                                            <div className="flex items-center">
+                                                                <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold mr-3">
+                                                                    {emp?.name ? emp.name.charAt(0) : '?'}
+                                                                </div>
+                                                                <div>
+                                                                    <div className="flex items-center gap-2 flex-wrap text-xs md:text-sm">
+                                                                        <p className="font-medium text-gray-900">
+                                                                            {emp ? emp.name : 'Unknown Employee'}
+                                                                        </p>
+                                                                        {!emp ? (
+                                                                            <span title="Employee record not found" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-red-100 text-red-800 cursor-help">
+                                                                                (Unknown)
+                                                                            </span>
+                                                                        ) : !emp.isActive ? (
+                                                                            <span title="Inactive — cannot be assigned" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-gray-100 text-gray-800 cursor-help">
+                                                                                (Inactive)
+                                                                            </span>
+                                                                        ) : null}
+
+                                                                        {/* Hints */}
+                                                                        {hasVacation && (
+                                                                            <span title="On vacation this day" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-orange-100 text-orange-800 border border-orange-200 cursor-help">
+                                                                                🏖️ Vacation
+                                                                            </span>
+                                                                        )}
+                                                                        {hasOverlap && (
+                                                                            <span title="Assigned to another schedule this day" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-yellow-100 text-yellow-800 border border-yellow-200 cursor-help">
+                                                                                ⚠️ Overbooked
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="text-xs text-gray-500 mt-0.5">
+                                                                        {!emp
+                                                                            ? 'Employee record not found'
+                                                                            : !emp.isActive
+                                                                                ? `${emp.email || 'No email'} (Inactive)`
+                                                                                : (emp.email || 'No email')
+                                                                        }
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Allow unassigning any individual day assignment */}
+                                                            {canManage && (
+                                                                <button
+                                                                    onClick={() => handleUnassign(assignment.id)}
+                                                                    className="text-sm text-red-600 hover:text-red-900 whitespace-nowrap ml-4 border border-transparent hover:border-red-200 px-2 py-1 rounded transition-colors"
+                                                                >
+                                                                    Unassign
+                                                                </button>
+                                                            )}
+                                                        </li>
+                                                    );
+                                                })}
+                                        </ul>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {activeTab === 'HISTORY' && (
+                    <div className="bg-white shadow rounded-lg p-6 border">
+                        <h3 className="text-lg font-medium text-gray-900 mb-6">Schedule History</h3>
+                        {auditLogs.length === 0 ? (
+                            <p className="text-sm text-gray-500 text-center py-4">No history records found.</p>
+                        ) : (
+                            <div className="flow-root">
+                                <ul role="list" className="-mb-8">
+                                    {auditLogs.map((log, logIdx) => {
+                                        const isLast = logIdx === auditLogs.length - 1;
+
+                                        // Format action name nicely
+                                        const actionName = log.action
+                                            .split('_')
+                                            .map((w: string) => w.charAt(0) + w.slice(1).toLowerCase())
+                                            .join(' ');
+
+                                        // Try to build a diff string
+                                        let diffDesc = '';
+                                        if (log.action === 'UPDATE_SCHEDULE' && log.oldData && log.newData) {
+                                            const oldS = log.oldData.startTime;
+                                            const newS = log.newData.startTime;
+                                            const oldE = log.oldData.endTime;
+                                            const newE = log.newData.endTime;
+
+                                            const oldTitle = log.oldData.title;
+                                            const newTitle = log.newData.title;
+
+                                            const timeChanged = oldS !== newS || oldE !== newE;
+                                            const titleChanged = oldTitle !== newTitle;
+
+                                            let diffs = [];
+                                            if (timeChanged) {
+                                                const osFormatted = oldS ? format(parseISO(oldS), 'MMM d, HH:mm') : '?';
+                                                const oeFormatted = oldE ? format(parseISO(oldE), 'HH:mm') : '?';
+                                                const nsFormatted = newS ? format(parseISO(newS), 'MMM d, HH:mm') : '?';
+                                                const neFormatted = newE ? format(parseISO(newE), 'HH:mm') : '?';
+                                                diffs.push(`Time: ${osFormatted}-${oeFormatted} → ${nsFormatted}-${neFormatted}`);
+                                            }
+                                            if (titleChanged) {
+                                                diffs.push(`Title: "${oldTitle}" → "${newTitle}"`);
+                                            }
+
+                                            diffDesc = diffs.join(' | ');
+                                        }
+
+                                        return (
+                                            <li key={log.id}>
+                                                <div className="relative pb-8">
+                                                    {!isLast && (
+                                                        <span className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-gray-200" aria-hidden="true" />
+                                                    )}
+                                                    <div className="relative flex space-x-3">
                                                         <div>
-                                                            <div className="flex items-center gap-2 flex-wrap text-xs md:text-sm">
-                                                                <p className="font-medium text-gray-900">
-                                                                    {emp ? emp.name : 'Unknown Employee'}
+                                                            <span className={`h-8 w-8 rounded-full flex items-center justify-center ring-8 ring-white ${log.action.includes('CREATE') ? 'bg-green-500' :
+                                                                log.action.includes('CANCEL') ? 'bg-red-500' :
+                                                                    'bg-blue-500'
+                                                                }`}>
+                                                                <span className="text-white text-xs font-bold">
+                                                                    {log.actor.name ? log.actor.name.charAt(0) : 'S'}
+                                                                </span>
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex min-w-0 flex-1 justify-between space-x-4 pt-1.5">
+                                                            <div>
+                                                                <p className="text-sm text-gray-500">
+                                                                    <span className="font-medium text-gray-900">{log.actor.name || 'System'}</span>
+                                                                    {' '}performed{' '}
+                                                                    <span className="font-medium text-gray-900">{actionName}</span>
                                                                 </p>
-                                                                {!emp ? (
-                                                                    <span title="Employee record not found" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-red-100 text-red-800 cursor-help">
-                                                                        (Unknown)
-                                                                    </span>
-                                                                ) : !emp.isActive ? (
-                                                                    <span title="Inactive — cannot be assigned" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-gray-100 text-gray-800 cursor-help">
-                                                                        (Inactive)
-                                                                    </span>
-                                                                ) : null}
-                                                                
-                                                                {/* Hints */}
-                                                                {hasVacation && (
-                                                                    <span title="On vacation this day" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-orange-100 text-orange-800 border border-orange-200 cursor-help">
-                                                                        🏖️ Vacation
-                                                                    </span>
-                                                                )}
-                                                                {hasOverlap && (
-                                                                    <span title="Assigned to another schedule this day" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-yellow-100 text-yellow-800 border border-yellow-200 cursor-help">
-                                                                        ⚠️ Overbooked
-                                                                    </span>
+                                                                {diffDesc && (
+                                                                    <div className="mt-2 text-sm text-gray-700 bg-gray-50 rounded-md p-2 border border-gray-100">
+                                                                        {diffDesc}
+                                                                    </div>
                                                                 )}
                                                             </div>
-                                                            <p className="text-xs text-gray-500 mt-0.5">
-                                                                {!emp
-                                                                    ? 'Employee record not found'
-                                                                    : !emp.isActive
-                                                                        ? `${emp.email || 'No email'} (Inactive)`
-                                                                        : (emp.email || 'No email')
-                                                                }
-                                                            </p>
+                                                            <div className="whitespace-nowrap text-right text-sm text-gray-500">
+                                                                <time dateTime={log.timestamp}>{format(parseISO(log.timestamp), 'MMM d, HH:mm(ss)')}</time>
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                    
-                                                    {/* Allow unassigning any individual day assignment */}
-                                                    {canManage && (
-                                                        <button
-                                                            onClick={() => handleUnassign(assignment.id)}
-                                                            className="text-sm text-red-600 hover:text-red-900 whitespace-nowrap ml-4 border border-transparent hover:border-red-200 px-2 py-1 rounded transition-colors"
-                                                        >
-                                                            Unassign
-                                                        </button>
-                                                    )}
-                                                </li>
-                                            );
-                                        })}
-                                    </ul>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
+                                                </div>
+                                            </li>
+                                        )
+                                    })}
+                                </ul>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Sidebar: Add Assignment */}
@@ -476,26 +638,33 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
             </div>
 
             {/* Edit Schedule Modal */}
-            {isEditModalOpen && (
-                <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="edit-modal-title" role="dialog" aria-modal="true">
-                    <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true" onClick={() => setIsEditModalOpen(false)}></div>
-                        <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-                        <div className="relative inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="edit-modal-title">
-                                    Edit Schedule
-                                </h3>
-                                <ScheduleForm
-                                    schedule={schedule}
-                                    onSuccess={handleEditSuccess}
-                                    onCancel={() => setIsEditModalOpen(false)}
-                                />
+            {
+                isEditModalOpen && (
+                    <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="edit-modal-title" role="dialog" aria-modal="true">
+                        <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                            <div className="fixed inset-0 z-40 bg-transparent backdrop-blur-sm backdrop-brightness-90 transition-all" aria-hidden="true" onClick={requestClose}></div>
+                            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                            <div className="relative z-50 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                                <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                    <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="edit-modal-title">
+                                        Edit Schedule
+                                    </h3>
+                                    <ScheduleForm
+                                        schedule={schedule}
+                                        onSuccess={handleEditSuccess}
+                                        onCancel={requestClose}
+                                        onDirtyChange={setIsDirty}
+                                        customerAreas={customerAreas}
+                                        scheduleStatuses={scheduleStatuses}
+                                        workTypes={workTypes}
+                                        offices={offices}
+                                    />
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 }

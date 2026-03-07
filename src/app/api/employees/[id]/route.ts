@@ -90,6 +90,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                 ...(data.subTeam !== undefined && { subTeam: data.subTeam }),
                 ...(data.joinYear !== undefined && { joinYear: data.joinYear }),
                 ...(data.isActive !== undefined && { isActive: data.isActive }),
+                ...(data.customerAreaId !== undefined && { customerAreaId: data.customerAreaId }),
             },
         });
 
@@ -113,6 +114,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                 subTeam: existing.subTeam,
                 joinYear: existing.joinYear,
                 isActive: existing.isActive,
+                customerAreaId: (existing as any).customerAreaId,
             }),
             newData: toAuditData({
                 name: employee.name,
@@ -123,6 +125,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                 subTeam: employee.subTeam,
                 joinYear: employee.joinYear,
                 isActive: employee.isActive,
+                customerAreaId: employee.customerAreaId,
             }),
         });
 
