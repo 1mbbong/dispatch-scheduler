@@ -15,7 +15,6 @@ import {
 import { cn } from '@/lib/utils';
 import { isCancelledStatus } from '@/lib/labels';
 import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee, SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
-import { CalendarCellQuickCreate } from '@/components/calendar-cell-quick-create';
 import { SelectionActionModal } from '@/components/selection-action-modal';
 
 interface WeekViewProps {
@@ -50,9 +49,6 @@ export function WeekView({
     const [showSelectionAction, setShowSelectionAction] = useState(false);
     const pointerOrigin = useRef<{ x: number; y: number } | null>(null);
 
-    // Click-to-quick-create state
-    const [quickCreateDay, setQuickCreateDay] = useState<Date | null>(null);
-
     const start = startOfWeek(initialDate, { weekStartsOn: 0 });
     const end = endOfWeek(initialDate, { weekStartsOn: 0 });
     const days = eachDayOfInterval({ start, end });
@@ -79,7 +75,6 @@ export function WeekView({
         router.push(`?date=${format(new Date(), 'yyyy-MM-dd')}`);
     };
 
-    // --- Pointer handlers for cells ---
     const handleCellPointerDown = (e: React.PointerEvent, day: Date) => {
         if (e.button !== 0) return;
         pointerOrigin.current = { x: e.clientX, y: e.clientY };
@@ -87,7 +82,6 @@ export function WeekView({
         setSelectionEnd(day);
         setIsDragging(false);
         setShowSelectionAction(false);
-        setQuickCreateDay(null);
     };
 
     const handleCellPointerMove = (e: React.PointerEvent, day: Date) => {
@@ -104,15 +98,16 @@ export function WeekView({
         if (!pointerOrigin.current) return;
 
         if (isDragging) {
-            // Finished dragging — show selection action
+            // Finished dragging — show selection action for the range
             setSelectionEnd(day);
-            setShowSelectionAction(true);
         } else {
-            // Click (no meaningful drag) — open quick create
-            if (canManage) setQuickCreateDay(day);
-            setSelectionStart(null);
-            setSelectionEnd(null);
+            // Click (no drag) — treat as single-day selection (matches MonthView)
+            setSelectionStart(day);
+            setSelectionEnd(day);
         }
+
+        // Both click and drag open SelectionActionModal
+        if (canManage) setShowSelectionAction(true);
 
         pointerOrigin.current = null;
         setIsDragging(false);
@@ -143,7 +138,6 @@ export function WeekView({
                 setSelectionStart(null);
                 setSelectionEnd(null);
                 setShowSelectionAction(false);
-                setQuickCreateDay(null);
             }
         };
         window.addEventListener('keydown', handleEscape);
@@ -303,40 +297,18 @@ export function WeekView({
                                     (day >= selectionStart && day <= selectionEnd) ||
                                     (day <= selectionStart && day >= selectionEnd)
                                 );
-                                const selectionActive = isDragging || showSelectionAction;
-                                const isForceOpen = !selectionActive && quickCreateDay !== null && isSameDay(day, quickCreateDay);
 
                                 return (
                                     <div
                                         key={format(day, 'yyyy-MM-dd')}
                                         className={cn(
-                                            "h-full pointer-events-auto group/cell relative cursor-cell select-none",
-                                            isSelected ? "bg-indigo-50/60" : "bg-gray-50/30"
+                                            "h-full pointer-events-auto relative cursor-cell select-none transition-colors",
+                                            isSelected ? "bg-indigo-50/60" : "bg-gray-50/30 hover:bg-gray-100/50"
                                         )}
                                         onPointerDown={(e) => handleCellPointerDown(e, day)}
                                         onPointerMove={(e) => handleCellPointerMove(e, day)}
                                         onPointerUp={() => handleCellPointerUp(day)}
-                                    >
-                                        {/* Quick Create overlay — hidden during selection */}
-                                        {!selectionActive && (
-                                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto opacity-0 group-hover/cell:opacity-100 transition-opacity">
-                                                {canManage && (
-                                                    <div className="w-full h-full flex items-center justify-center">
-                                                        <CalendarCellQuickCreate
-                                                            date={day}
-                                                            employees={employees}
-                                                            customerAreas={customerAreas}
-                                                            scheduleStatuses={scheduleStatuses}
-                                                            workTypes={workTypes}
-                                                            offices={offices}
-                                                            forceOpen={isForceOpen}
-                                                            onForceOpenHandled={() => setQuickCreateDay(null)}
-                                                        />
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
+                                    />
                                 );
                             })}
                         </div>
