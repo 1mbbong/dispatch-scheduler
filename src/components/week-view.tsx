@@ -40,6 +40,9 @@ export function WeekView({
     workTypes = [],
     offices = []
 }: WeekViewProps) {
+    const [pointerDownStart, setPointerDownStart] = useState<{ x: number, y: number } | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
+
     const router = useRouter();
 
     const start = startOfWeek(initialDate, { weekStartsOn: 0 });
@@ -58,6 +61,35 @@ export function WeekView({
 
     const handleToday = () => {
         router.push(`?date=${format(new Date(), 'yyyy-MM-dd')}`);
+    };
+
+    const handlePointerDown = (e: React.PointerEvent) => {
+        if (e.button !== 0) return; // Only primary clicks
+        setPointerDownStart({ x: e.clientX, y: e.clientY });
+        setIsDragging(false);
+    };
+
+    const handlePointerMove = (e: React.PointerEvent) => {
+        if (!pointerDownStart) return;
+        if (Math.abs(e.clientX - pointerDownStart.x) > 6 || Math.abs(e.clientY - pointerDownStart.y) > 6) {
+            setIsDragging(true);
+        }
+    };
+
+    const handlePointerUp = (e: React.PointerEvent, day: Date) => {
+        if (pointerDownStart && !isDragging) {
+            // It was a click (not a drag). Open quick create if can manage.
+            // Ensure they didn't explicitly click the Quick Create button (which handles itself)
+            if (canManage && !(e.target as HTMLElement).closest('button')) {
+                const cellGroup = e.currentTarget as HTMLElement;
+                const quickCreateBtn = cellGroup.querySelector('button[title="Quick create"]') as HTMLButtonElement | null;
+                if (quickCreateBtn) {
+                    quickCreateBtn.click();
+                }
+            }
+        }
+        setPointerDownStart(null);
+        setIsDragging(false);
     };
 
     const weekSchedules = useMemo(() => {
@@ -212,6 +244,9 @@ export function WeekView({
                                 <div
                                     key={format(day, 'yyyy-MM-dd')}
                                     className="h-full bg-gray-50/30 pointer-events-auto group/cell relative"
+                                    onPointerDown={handlePointerDown}
+                                    onPointerMove={handlePointerMove}
+                                    onPointerUp={(e) => handlePointerUp(e, day)}
                                 >
                                     {/* Quick Create overlay anchored to the cell */}
                                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto opacity-0 group-hover/cell:opacity-100 transition-opacity">
@@ -292,6 +327,7 @@ export function WeekView({
                                         role="button"
                                         tabIndex={0}
                                         aria-label={`Schedule: ${schedule.title}, ${timeLabel}`}
+                                        onPointerDown={(e) => e.stopPropagation()} // Prevent cell click logic
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             router.push(`/schedules/${schedule.id}`);
