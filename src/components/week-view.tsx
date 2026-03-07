@@ -299,11 +299,12 @@ export function WeekView({
                         {/* Background columns for clicks & borders */}
                         <div className="absolute inset-0 grid grid-cols-7 divide-x pointer-events-none">
                             {days.map(day => {
-                                const isSelected = selectionStart && selectionEnd && isDragging && (
+                                const isSelected = selectionStart && selectionEnd && (isDragging || showSelectionAction) && (
                                     (day >= selectionStart && day <= selectionEnd) ||
                                     (day <= selectionStart && day >= selectionEnd)
                                 );
-                                const isForceOpen = quickCreateDay !== null && isSameDay(day, quickCreateDay);
+                                const selectionActive = isDragging || showSelectionAction;
+                                const isForceOpen = !selectionActive && quickCreateDay !== null && isSameDay(day, quickCreateDay);
 
                                 return (
                                     <div
@@ -316,23 +317,25 @@ export function WeekView({
                                         onPointerMove={(e) => handleCellPointerMove(e, day)}
                                         onPointerUp={() => handleCellPointerUp(day)}
                                     >
-                                        {/* Quick Create overlay anchored to the cell */}
-                                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto opacity-0 group-hover/cell:opacity-100 transition-opacity">
-                                            {canManage && (
-                                                <div className="w-full h-full flex items-center justify-center">
-                                                    <CalendarCellQuickCreate
-                                                        date={day}
-                                                        employees={employees}
-                                                        customerAreas={customerAreas}
-                                                        scheduleStatuses={scheduleStatuses}
-                                                        workTypes={workTypes}
-                                                        offices={offices}
-                                                        forceOpen={isForceOpen}
-                                                        onForceOpenHandled={() => setQuickCreateDay(null)}
-                                                    />
-                                                </div>
-                                            )}
-                                        </div>
+                                        {/* Quick Create overlay — hidden during selection */}
+                                        {!selectionActive && (
+                                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto opacity-0 group-hover/cell:opacity-100 transition-opacity">
+                                                {canManage && (
+                                                    <div className="w-full h-full flex items-center justify-center">
+                                                        <CalendarCellQuickCreate
+                                                            date={day}
+                                                            employees={employees}
+                                                            customerAreas={customerAreas}
+                                                            scheduleStatuses={scheduleStatuses}
+                                                            workTypes={workTypes}
+                                                            offices={offices}
+                                                            forceOpen={isForceOpen}
+                                                            onForceOpenHandled={() => setQuickCreateDay(null)}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
