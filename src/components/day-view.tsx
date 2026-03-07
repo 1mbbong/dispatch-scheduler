@@ -127,8 +127,20 @@ export function DayView({ schedules }: DayViewProps) {
                             }}
                         >
                             <div className="flex items-start justify-between gap-1 overflow-hidden" style={{ color: isCancelled ? '#6b7280' : blockStyles.color, textDecoration: isCancelled ? 'line-through' : 'none' }}>
-                                <div className={`font-semibold truncate flex-1`}>
-                                    {schedule.title}
+                                <div className="flex items-center gap-1 truncate flex-1">
+                                    {(() => {
+                                        const wlt = (schedule as any).workLocationType;
+                                        const chip = wlt === 'OFFICE' && (schedule as any).office?.name
+                                            ? (schedule as any).office.name
+                                            : wlt === 'REMOTE' ? 'WFH'
+                                                : (customerArea as any)?.name || null;
+                                        return chip ? (
+                                            <span className="shrink-0 text-[9px] px-1 rounded bg-slate-100 border border-slate-200 text-slate-600 font-medium" style={{ textDecoration: 'none' }}>
+                                                {chip}
+                                            </span>
+                                        ) : null;
+                                    })()}
+                                    <span className="font-semibold truncate">{schedule.title}</span>
                                 </div>
                                 {/* Status badge */}
                                 {schedule.scheduleStatus && !isCancelled && (

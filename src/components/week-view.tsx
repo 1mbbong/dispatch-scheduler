@@ -387,6 +387,18 @@ export function WeekView({
                                         }}
                                     >
                                         <div className="flex items-center gap-1 overflow-hidden shrink-0">
+                                            {(() => {
+                                                const wlt = (schedule as any).workLocationType;
+                                                const chip = wlt === 'OFFICE' && (schedule as any).office?.name
+                                                    ? (schedule as any).office.name
+                                                    : wlt === 'REMOTE' ? 'WFH'
+                                                        : (schedule.customerArea as any)?.name || null;
+                                                return chip ? (
+                                                    <span className="shrink-0 text-[9px] px-1 rounded bg-slate-100 border border-slate-200 text-slate-600 font-medium">
+                                                        {chip}
+                                                    </span>
+                                                ) : null;
+                                            })()}
                                             <div className={cn("font-semibold truncate", isCancelled ? 'text-gray-500 line-through' : 'text-gray-900')}>
                                                 {schedule.title}
                                             </div>

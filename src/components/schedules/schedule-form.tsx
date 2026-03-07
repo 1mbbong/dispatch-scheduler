@@ -348,7 +348,7 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
                                         {
                                             type === 'OFFICE' ? '🏢 Office' :
                                                 type === 'FIELD' ? '🚗 Field' :
-                                                    '🏠 Remote'
+                                                    '🏠 WFH'
                                         }
                                     </span>
                                 </div>
