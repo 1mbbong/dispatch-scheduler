@@ -14,9 +14,11 @@ interface CalendarCellQuickCreateProps {
     scheduleStatuses?: SerializedScheduleStatus[];
     workTypes?: SerializedWorkType[];
     offices?: { id: string, name: string }[];
+    forceOpen?: boolean;
+    onForceOpenHandled?: () => void;
 }
 
-export function CalendarCellQuickCreate({ date, employees, customerAreas = [], scheduleStatuses = [], workTypes = [], offices = [] }: CalendarCellQuickCreateProps) {
+export function CalendarCellQuickCreate({ date, employees, customerAreas = [], scheduleStatuses = [], workTypes = [], offices = [], forceOpen = false, onForceOpenHandled }: CalendarCellQuickCreateProps) {
     const router = useRouter();
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [openModal, setOpenModal] = useState<'schedule' | 'vacation' | null>(null);
@@ -57,6 +59,14 @@ export function CalendarCellQuickCreate({ date, employees, customerAreas = [], s
             document.removeEventListener('keydown', handleKeyDown, true);
         };
     }, [openModal]);
+
+    // Handle forceOpen from parent
+    useEffect(() => {
+        if (forceOpen && !isMenuOpen && !openModal) {
+            setIsMenuOpen(true);
+            onForceOpenHandled?.();
+        }
+    }, [forceOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Close menu when clicking outside
     useEffect(() => {
