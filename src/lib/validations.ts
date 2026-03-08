@@ -91,6 +91,7 @@ export const createAssignmentSchema = z.object({
     scheduleId: z.string().cuid(),
     employeeId: z.string().cuid(),
     date: z.coerce.date(),
+    allowConflicts: z.boolean().optional().default(false),
 });
 
 export const bulkAssignmentSchema = z.object({
