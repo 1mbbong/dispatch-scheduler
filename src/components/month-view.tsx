@@ -423,8 +423,8 @@ export function MonthView({
 
     // Drag and drop handlers
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
-        // Prevent drop if range selection is active
-        if (isDragging || !canManage) return;
+        // We do not check isDragging here because native DnD runs concurrently with pointer events.
+        if (!canManage) return;
         e.preventDefault(); // allow drop
 
         if (draggedSchedule) {
@@ -436,7 +436,7 @@ export function MonthView({
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
-        if (isDragging || !canManage || !draggedSchedule) return;
+        if (!canManage || !draggedSchedule) return;
         e.preventDefault();
 
         const { schedule, originalStart, originalEnd } = draggedSchedule;

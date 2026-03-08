@@ -147,7 +147,7 @@ export function WeekView({
 
     // --- DnD reschedule handlers ---
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
-        if (isDragging || !canManage) return;
+        if (!canManage) return;
         e.preventDefault();
 
         if (draggedSchedule) {
@@ -159,7 +159,7 @@ export function WeekView({
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
-        if (isDragging || !canManage || !draggedSchedule) return;
+        if (!canManage || !draggedSchedule) return;
         e.preventDefault();
 
         const { schedule, originalStart, originalEnd } = draggedSchedule;
