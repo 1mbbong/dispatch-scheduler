@@ -538,7 +538,7 @@ export function WeekView({
                                             )}
                                             {/* Drag Handle */}
                                             {(() => {
-                                                const eligibility = getDnDEligibility(schedule, canManage, block);
+                                                const eligibility = getDnDEligibility(schedule, canManage);
                                                 return (
                                                     <div
                                                         draggable={eligibility.draggable}
