@@ -12,6 +12,7 @@ interface FilterDefaults {
     loc?: { office: boolean; wfh: boolean; field: boolean };
     ghosts?: boolean;
     dayCounts?: boolean;
+    people?: number;
 }
 
 interface CalendarFilterProps {
@@ -38,6 +39,7 @@ export function CalendarFilter({ customerAreas, view = 'month', role, filterDefa
     const [dLoc, setDLoc] = useState(filterDefaults?.loc ?? { office: true, wfh: true, field: true });
     const [dGhosts, setDGhosts] = useState(filterDefaults?.ghosts ?? true);
     const [dDayCounts, setDDayCounts] = useState(filterDefaults?.dayCounts ?? true);
+    const [dPeople, setDPeople] = useState(filterDefaults?.people ?? 0);
 
     // Sync modal state when filterDefaults prop changes
     useEffect(() => {
@@ -46,6 +48,7 @@ export function CalendarFilter({ customerAreas, view = 'month', role, filterDefa
         setDLoc(filterDefaults?.loc ?? { office: true, wfh: true, field: true });
         setDGhosts(filterDefaults?.ghosts ?? true);
         setDDayCounts(filterDefaults?.dayCounts ?? true);
+        setDPeople(filterDefaults?.people ?? 0);
     }, [filterDefaults]);
 
     // --- Read current filter state from URL ---
@@ -171,6 +174,7 @@ export function CalendarFilter({ customerAreas, view = 'month', role, filterDefa
                     loc: dLoc,
                     ghosts: dGhosts,
                     dayCounts: dDayCounts,
+                    people: dPeople,
                 }),
             });
             if (!res.ok) {
@@ -392,6 +396,19 @@ export function CalendarFilter({ customerAreas, view = 'month', role, filterDefa
                                             <input type="checkbox" checked={dDayCounts} onChange={e => setDDayCounts(e.target.checked)} className="h-3.5 w-3.5 text-indigo-600 border-gray-300 rounded" />
                                             <span className="text-xs text-gray-700">Show day counts</span>
                                         </label>
+                                    </div>
+                                </div>
+
+                                {/* Default: People Visibility */}
+                                <div>
+                                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-1">People Visibility</span>
+                                    <div className="flex gap-3">
+                                        {[0, 1, 2].map(level => (
+                                            <label key={level} className="flex items-center gap-1.5 cursor-pointer">
+                                                <input type="radio" name="dPeople" checked={dPeople === level} onChange={() => setDPeople(level)} className="h-3.5 w-3.5 text-indigo-600 border-gray-300" />
+                                                <span className="text-xs text-gray-700">{level === 0 ? '0 — Off' : level === 1 ? '1 — Names' : '2 — Full'}</span>
+                                            </label>
+                                        ))}
                                     </div>
                                 </div>
                             </div>

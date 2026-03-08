@@ -14,6 +14,7 @@ const filterDefaultsSchema = z.object({
     }).optional(),
     ghosts: z.boolean().optional(),
     dayCounts: z.boolean().optional(),
+    people: z.number().int().min(0).max(2).optional(),
 }).strict();
 
 // GET /api/tenant/filter-defaults — any authenticated user

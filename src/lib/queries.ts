@@ -577,6 +577,7 @@ export interface FilterDefaults {
     loc?: { office: boolean; wfh: boolean; field: boolean };
     ghosts?: boolean;
     dayCounts?: boolean;
+    people?: number;
 }
 
 export async function getFilterDefaults(tenantId: string): Promise<FilterDefaults | null> {

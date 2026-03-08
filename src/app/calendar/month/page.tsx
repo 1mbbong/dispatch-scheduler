@@ -54,7 +54,7 @@ export default async function MonthCalendarPage({ searchParams }: PageProps) {
     ]);
 
     // People level: URL wins, default 0
-    const peopleLevel = params.people ? parseInt(params.people, 10) || 0 : 0;
+    const peopleLevel = params.people !== undefined ? (parseInt(params.people, 10) || 0) : (defaults?.people ?? 0);
 
     // --- Merge filter defaults ---
     const areasRaw = params.areas;
