@@ -66,6 +66,7 @@ export function MonthView({
 
     // Drag-and-drop reschedule state
     const [draggedSchedule, setDraggedSchedule] = useState<{ schedule: SerializedScheduleWithAssignments; originalStart: Date; originalEnd: Date } | null>(null);
+    const [hoveredDropDate, setHoveredDropDate] = useState<string | null>(null); // YYYY-MM-DD
     const [confirmReschedule, setConfirmReschedule] = useState<{ schedule: SerializedScheduleWithAssignments; newStart: Date; newEnd: Date } | null>(null);
     const [isRescheduling, setIsRescheduling] = useState(false);
     const toast = useToast();
@@ -112,6 +113,12 @@ export function MonthView({
             schedules.forEach(s => uniqueSchedules.set(s.id, s));
 
             for (const schedule of Array.from(uniqueSchedules.values())) {
+                // If this is the currently dragged schedule, ignore it in the collision/rendering loop
+                // to prevent it from occupying its old spot while dragging
+                if (draggedSchedule && schedule.id === draggedSchedule.schedule.id) {
+                    continue;
+                }
+
                 const sStart = parseISO(schedule.startTime);
                 const sEnd = parseISO(schedule.endTime);
 
@@ -144,6 +151,46 @@ export function MonthView({
                 }
             }
 
+            // Inject the Hover Preview block if calculating
+            if (draggedSchedule && hoveredDropDate) {
+                const { schedule, originalStart, originalEnd } = draggedSchedule;
+                const durationMs = originalEnd.getTime() - originalStart.getTime();
+
+                const hoverDay = new Date(`${hoveredDropDate}T00:00:00`);
+                // Assume drop defaults to the original local start HH:MM
+                const newStart = new Date(hoverDay);
+                newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+                const newEnd = new Date(newStart.getTime() + durationMs);
+
+                if (newStart <= weekEndLocal && newEnd >= weekStartLocal) {
+                    let startIndex = -1;
+                    let endIndex = -1;
+
+                    for (let i = 0; i < 7; i++) {
+                        const dayStart = new Date(weekDays[i]); dayStart.setHours(0, 0, 0, 0);
+                        const dayEnd = new Date(weekDays[i]); dayEnd.setHours(23, 59, 59, 999);
+
+                        if (newStart <= dayEnd && newEnd >= dayStart) {
+                            if (startIndex === -1) startIndex = i;
+                            endIndex = i;
+                        }
+                    }
+
+                    if (startIndex !== -1) {
+                        blocks.push({
+                            schedule: { ...schedule, id: '__preview__' },
+                            isPreview: true, // Special tag for ghost styling
+                            gridColumnStart: startIndex + 1,
+                            gridColumnEnd: endIndex + 2,
+                            startsBeforeWeek: newStart < weekStartLocal,
+                            endsAfterWeek: newEnd > weekEndLocal,
+                            startTime: newStart,
+                            endTime: newEnd
+                        });
+                    }
+                }
+            }
+
             // Sort blocks: earlier start first, then longer duration
             blocks.sort((a, b) => {
                 if (a.startTime.getTime() !== b.startTime.getTime()) {
@@ -154,7 +201,7 @@ export function MonthView({
 
             return blocks;
         });
-    }, [weeks, schedules]);
+    }, [weeks, schedules, draggedSchedule, hoveredDropDate]);
 
     const schedulesByDay = useMemo(() => {
         const map = new Map<string, number>();
@@ -314,7 +361,6 @@ export function MonthView({
         });
     }, [weeks, vacations]);
 
-    // Handle global mouse up to stop dragging if they release outside calendar
     useEffect(() => {
         const handleGlobalMouseUp = () => {
             if (isDragging) {
@@ -323,10 +369,14 @@ export function MonthView({
                     setShowSelectionAction(true);
                 }
             }
+            if (draggedSchedule) {
+                setDraggedSchedule(null);
+                setHoveredDropDate(null);
+            }
         };
         window.addEventListener('mouseup', handleGlobalMouseUp);
         return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-    }, [isDragging, selectionStart, selectionEnd]);
+    }, [isDragging, selectionStart, selectionEnd, draggedSchedule]);
 
     // Handle Escape key to clear selection
     useEffect(() => {
@@ -336,6 +386,8 @@ export function MonthView({
                 setSelectionStart(null);
                 setSelectionEnd(null);
                 setIsDragging(false);
+                setHoveredDropDate(null);
+                setDraggedSchedule(null);
             }
         };
         window.addEventListener('keydown', handleKeyDown);
@@ -370,10 +422,17 @@ export function MonthView({
     };
 
     // Drag and drop handlers
-    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
         // Prevent drop if range selection is active
         if (isDragging || !canManage) return;
         e.preventDefault(); // allow drop
+
+        if (draggedSchedule) {
+            const dateStr = format(day, 'yyyy-MM-dd');
+            if (hoveredDropDate !== dateStr) {
+                setHoveredDropDate(dateStr);
+            }
+        }
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
@@ -398,6 +457,7 @@ export function MonthView({
         }
 
         setDraggedSchedule(null); // Clear drag state
+        setHoveredDropDate(null);
     };
 
     const executeReschedule = async () => {
@@ -498,6 +558,9 @@ export function MonthView({
                         }
                         const durationDiff = (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
                         if (durationDiff !== 0) return durationDiff;
+                        // Sort live blocks first, then preview ghosts, then standard ghosts
+                        if (a.isPreview && !b.isPreview) return 1;
+                        if (!a.isPreview && b.isPreview) return -1;
                         return a.isGhost ? -1 : 1;
                     });
 
@@ -562,7 +625,7 @@ export function MonthView({
                                         }}
                                         onMouseEnter={() => handleCellMouseEnter(day)}
                                         onMouseUp={() => handleCellMouseUp(day)}
-                                        onDragOver={handleDragOver}
+                                        onDragOver={(e) => handleDragOver(e, day)}
                                         onDrop={(e) => handleDrop(e, day)}
                                         className={cn(
                                             "relative min-h-[100px] p-2 border-r flex flex-col transition-colors cursor-cell select-none",
@@ -658,6 +721,25 @@ export function MonthView({
                                 <div className="grid grid-cols-7 gap-y-1 h-full content-start">
                                     {visibleBlocks.map((block, idx) => {
                                         const schedule = block.schedule;
+
+                                        if (block.isPreview) {
+                                            return (
+                                                <div
+                                                    key={`preview-${weekIndex}-${idx}`}
+                                                    className={cn(
+                                                        "mx-0.5 px-1.5 py-1 sm:py-0.5 rounded transition-all pointer-events-none select-none",
+                                                        "opacity-60 border-2 border-dashed border-gray-400 bg-gray-100",
+                                                        block.startsBeforeWeek ? "rounded-l-none border-l-0 ml-0" : "rounded-l border-l-2",
+                                                        block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r"
+                                                    )}
+                                                    style={{
+                                                        gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
+                                                    }}
+                                                >
+                                                    <div className="w-full h-full min-h-[16px]" />
+                                                </div>
+                                            );
+                                        }
 
                                         if (block.isGhost) {
                                             return (

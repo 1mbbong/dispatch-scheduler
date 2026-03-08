@@ -55,6 +55,7 @@ export function WeekView({
 
     // DnD reschedule state
     const [draggedSchedule, setDraggedSchedule] = useState<{ schedule: SerializedScheduleWithAssignments; originalStart: Date; originalEnd: Date } | null>(null);
+    const [hoveredDropDate, setHoveredDropDate] = useState<string | null>(null); // YYYY-MM-DD
     const [confirmReschedule, setConfirmReschedule] = useState<{ schedule: SerializedScheduleWithAssignments; newStart: Date; newEnd: Date } | null>(null);
     const [isRescheduling, setIsRescheduling] = useState(false);
 
@@ -135,15 +136,26 @@ export function WeekView({
                 pointerOrigin.current = null;
                 setIsDragging(false);
             }
+            if (draggedSchedule) {
+                setDraggedSchedule(null);
+                setHoveredDropDate(null);
+            }
         };
         window.addEventListener('pointerup', handleGlobalPointerUp);
         return () => window.removeEventListener('pointerup', handleGlobalPointerUp);
-    }, [isDragging, selectionStart]);
+    }, [isDragging, selectionStart, draggedSchedule]);
 
     // --- DnD reschedule handlers ---
-    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
         if (isDragging || !canManage) return;
         e.preventDefault();
+
+        if (draggedSchedule) {
+            const dateStr = format(day, 'yyyy-MM-dd');
+            if (hoveredDropDate !== dateStr) {
+                setHoveredDropDate(dateStr);
+            }
+        }
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
@@ -164,6 +176,7 @@ export function WeekView({
             setConfirmReschedule({ schedule, newStart, newEnd });
         }
         setDraggedSchedule(null);
+        setHoveredDropDate(null);
     };
 
     const executeReschedule = async () => {
@@ -215,6 +228,8 @@ export function WeekView({
                 setSelectionEnd(null);
                 setShowSelectionAction(false);
                 if (!isRescheduling) setConfirmReschedule(null);
+                setDraggedSchedule(null);
+                setHoveredDropDate(null);
             }
         };
         window.addEventListener('keydown', handleEscape);
@@ -229,6 +244,11 @@ export function WeekView({
         schedules.forEach(s => uniqueSchedules.set(s.id, s));
 
         for (const schedule of Array.from(uniqueSchedules.values())) {
+            // If dragging, ignore the original schedule
+            if (draggedSchedule && schedule.id === draggedSchedule.schedule.id) {
+                continue;
+            }
+
             const sStart = parseISO(schedule.startTime);
             const sEnd = parseISO(schedule.endTime);
 
@@ -261,16 +281,58 @@ export function WeekView({
             }
         }
 
+        if (draggedSchedule && hoveredDropDate) {
+            const { schedule, originalStart, originalEnd } = draggedSchedule;
+            const durationMs = originalEnd.getTime() - originalStart.getTime();
+
+            const hoverDay = new Date(`${hoveredDropDate}T00:00:00`);
+            const newStart = new Date(hoverDay);
+            newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+            const newEnd = new Date(newStart.getTime() + durationMs);
+
+            let startIndex = -1;
+            let endIndex = -1;
+
+            for (let i = 0; i < 7; i++) {
+                const dayStart = new Date(days[i]); dayStart.setHours(0, 0, 0, 0);
+                const dayEnd = new Date(days[i]); dayEnd.setHours(23, 59, 59, 999);
+
+                // Intersects with this day?
+                const intersects = newStart < dayEnd && newEnd > dayStart;
+                if (intersects) {
+                    if (startIndex === -1) startIndex = i;
+                    endIndex = i;
+                }
+            }
+
+            if (startIndex !== -1) {
+                blocks.push({
+                    schedule: { ...schedule, id: '__preview__' },
+                    isPreview: true,
+                    gridColumnStart: startIndex + 1,
+                    gridColumnEnd: endIndex + 2,
+                    startsBeforeWeek: newStart < start,
+                    endsAfterWeek: newEnd > end,
+                    startTime: newStart,
+                    endTime: newEnd,
+                });
+            }
+        }
+
         // Sort blocks: earlier start first, then longer duration first
         blocks.sort((a, b) => {
             if (a.startTime.getTime() !== b.startTime.getTime()) {
                 return a.startTime.getTime() - b.startTime.getTime();
             }
-            return (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
+            const durationDiff = (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
+            if (durationDiff !== 0) return durationDiff;
+            if (a.isPreview && !b.isPreview) return 1;
+            if (!a.isPreview && b.isPreview) return -1;
+            return 0;
         });
 
         return blocks;
-    }, [schedules, days, start, end]);
+    }, [schedules, days, start, end, draggedSchedule, hoveredDropDate]);
 
     const weekVacations = useMemo(() => {
         const blocks = [];
@@ -406,7 +468,7 @@ export function WeekView({
                                         onPointerDown={(e) => handleCellPointerDown(e, day)}
                                         onPointerMove={(e) => handleCellPointerMove(e, day)}
                                         onPointerUp={() => handleCellPointerUp(day)}
-                                        onDragOver={handleDragOver}
+                                        onDragOver={(e) => handleDragOver(e, day)}
                                         onDrop={(e) => handleDrop(e, day)}
                                     />
                                 );
@@ -439,6 +501,26 @@ export function WeekView({
                         <div className="relative z-10 grid grid-cols-7 gap-y-2 p-2 pointer-events-none">
                             {weekSchedules.map(block => {
                                 const schedule = block.schedule;
+
+                                if (block.isPreview) {
+                                    return (
+                                        <div
+                                            key={`preview-${schedule.id}`}
+                                            className={cn(
+                                                "group relative flex flex-col p-2 text-xs transition-all pointer-events-none select-none",
+                                                "opacity-60 border-2 border-dashed border-gray-400 bg-gray-100",
+                                                block.startsBeforeWeek ? "rounded-l-none border-l-0" : "rounded-l-md",
+                                                block.endsAfterWeek ? "rounded-r-none border-r-0" : "rounded-r-md"
+                                            )}
+                                            style={{
+                                                gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
+                                            }}
+                                        >
+                                            <div className="w-full h-full min-h-[32px]" />
+                                        </div>
+                                    );
+                                }
+
                                 const isCancelled = isCancelledStatus(schedule.scheduleStatus);
                                 const categoryColor = schedule.customerArea ? (schedule.customerArea as any).color : '#6366f1';
 
