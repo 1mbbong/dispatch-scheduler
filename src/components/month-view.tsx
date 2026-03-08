@@ -33,6 +33,7 @@ interface MonthViewProps {
     scheduleStatuses?: SerializedScheduleStatus[];
     workTypes?: SerializedWorkType[];
     offices?: { id: string, name: string }[];
+    showDayCounts?: boolean;
 }
 
 const LANE_CAP_ENABLED = false; // future tenant setting hook
@@ -51,7 +52,8 @@ export function MonthView({
     customerAreas = [],
     scheduleStatuses = [],
     workTypes = [],
-    offices = []
+    offices = [],
+    showDayCounts = true,
 }: MonthViewProps) {
     const router = useRouter();
 
@@ -549,7 +551,7 @@ export function MonthView({
                                             )} draggable={false}>
                                                 {format(day, dateFormat)}
                                             </span>
-                                            {totalSchedulesCount > 0 && (
+                                            {showDayCounts && totalSchedulesCount > 0 && (
                                                 <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1.5 rounded-full z-10">
                                                     {totalSchedulesCount}
                                                 </span>

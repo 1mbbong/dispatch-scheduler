@@ -2,7 +2,7 @@ import { requireAuthServer } from '@/lib/auth';
 import { getSchedules, getEmployees } from '@/lib/queries';
 import { redirect } from 'next/navigation';
 import { CalendarViewToggle } from '@/components/calendar-view-toggle';
-import { CustomerAreaFilter } from '@/components/calendar/customer-area-filter';
+import { CalendarFilter } from '@/components/calendar/calendar-filter';
 import { CustomerAreaSummaryBadges } from '@/components/calendar/customer-area-summary';
 import { DayView } from '@/components/day-view';
 import { DayQuickCreate } from '@/components/day-quick-create';
@@ -14,11 +14,11 @@ import { SerializedScheduleWithAssignments } from '@/types';
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-    searchParams: Promise<{ date?: string, areas?: string }>;
+    searchParams: Promise<{ date?: string, areas?: string, unstaffed?: string, loc?: string }>;
 }
 
 export default async function DayCalendarPage({ searchParams }: PageProps) {
-    const { date, areas } = await searchParams;
+    const { date, areas, unstaffed, loc } = await searchParams;
 
     let auth;
     try {
@@ -60,18 +60,40 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
         m.getAvailabilitySummary(auth.tenantId, currentDate, selectedAreas)
     );
 
+    // --- Apply filters ---
+    let filteredSchedules = schedules;
 
+    // Area filter
+    if (selectedAreas !== null) {
+        filteredSchedules = filteredSchedules.filter((s: any) => {
+            if (s.customerAreaId) return selectedAreas.includes(s.customerAreaId);
+            return selectedAreas.includes('unassigned');
+        });
+    }
+
+    // Location filter
+    if (loc && loc !== 'none') {
+        const locTypes = loc.split(',');
+        const typeMap: Record<string, string> = { office: 'OFFICE', wfh: 'REMOTE', field: 'FIELD' };
+        const allowedTypes = locTypes.map(l => typeMap[l]).filter(Boolean);
+        filteredSchedules = filteredSchedules.filter((s: any) =>
+            allowedTypes.includes(s.workLocationType || 'FIELD')
+        );
+    } else if (loc === 'none') {
+        filteredSchedules = [];
+    }
+
+    // Unstaffed filter (assignments eagerly loaded by getSchedules)
+    if (unstaffed === '1') {
+        filteredSchedules = filteredSchedules.filter((s: any) =>
+            !s.assignments || s.assignments.length === 0
+        );
+    }
 
     const displayDate = format(currentDate, 'EEEE, MMMM d, yyyy');
     const prevDate = format(subDays(currentDate, 1), 'yyyy-MM-dd');
     const nextDate = format(addDays(currentDate, 1), 'yyyy-MM-dd');
     const todayDate = format(today, 'yyyy-MM-dd');
-    const filteredSchedules = selectedAreas === null
-        ? schedules
-        : schedules.filter((s: any) => {
-            if (s.customerAreaId) return selectedAreas.includes(s.customerAreaId);
-            return selectedAreas.includes('unassigned');
-        });
 
     return (
         <div className="space-y-4">
@@ -82,7 +104,7 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
                 <div className="flex items-center gap-4">
                     <CustomerAreaSummaryBadges summary={availabilitySummary} />
                     <Suspense>
-                        <CustomerAreaFilter customerAreas={customerAreas} />
+                        <CalendarFilter customerAreas={customerAreas} view="day" />
                     </Suspense>
                     <Suspense>
                         <CalendarViewToggle />
