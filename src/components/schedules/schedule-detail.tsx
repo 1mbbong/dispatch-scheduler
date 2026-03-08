@@ -210,7 +210,7 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
                                                     key={emp.id}
                                                     type="button"
                                                     disabled={isLoading || !canManage}
-                                                    onClick={() => handleToggleAssignee(emp.id, day)}
+                                                    onClick={() => handleToggleAssignee(emp.id, day, undefined, { type: 'OVERBOOKED', details: emp.conflictContext })}
                                                     title={emp.conflictContext}
                                                     className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-50 text-yellow-800 border border-yellow-300 hover:bg-yellow-100 transition-colors group relative disabled:opacity-50"
                                                 >
@@ -228,7 +228,7 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
                                                     key={emp.id}
                                                     type="button"
                                                     disabled={isLoading || !canManage}
-                                                    onClick={() => handleToggleAssignee(emp.id, day)}
+                                                    onClick={() => handleToggleAssignee(emp.id, day, undefined, { type: 'VACATION' })}
                                                     className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-50 text-orange-800 border border-orange-300 hover:bg-orange-100 transition-colors disabled:opacity-50"
                                                 >
                                                     <span className="mr-1">🏖️</span> {emp.name}
@@ -258,7 +258,7 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
         router.refresh();
     };
 
-    const handleToggleAssignee = async (employeeId: string, day: Date, currentAssignmentId?: string) => {
+    const handleToggleAssignee = async (employeeId: string, day: Date, currentAssignmentId?: string, conflictContext?: { type: 'VACATION' | 'OVERBOOKED', details?: string }) => {
         if (!canManage) return;
         setIsLoading(true);
 
@@ -273,6 +273,19 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
                 }
             } else {
                 // ADD
+                if (conflictContext) {
+                    const dateStr = format(day, 'yyyy-MM-dd');
+                    const isVacation = conflictContext.type === 'VACATION';
+                    const msgContext = isVacation
+                        ? 'This employee is on vacation on this day.'
+                        : `This employee is already scheduled on this day.\nConflict: ${conflictContext.details || 'another schedule'}`;
+
+                    if (!window.confirm(`Assign anyway on ${dateStr}?\n\n${msgContext}`)) {
+                        setIsLoading(false);
+                        return;
+                    }
+                }
+
                 const y = day.getFullYear();
                 const m = day.getMonth(); // 0-indexed
                 const d = day.getDate();
@@ -342,9 +355,9 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
 
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="max-w-4xl mx-auto px-4 pb-12 pt-6 w-full">
             {/* Main Info */}
-            <div className="md:col-span-2 space-y-6">
+            <div className="space-y-6">
                 <div className="bg-white shadow rounded-lg p-6 border">
                     <div className="flex justify-between items-start">
                         <div>
