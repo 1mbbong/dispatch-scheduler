@@ -14,6 +14,7 @@ import {
 } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { isCancelledStatus } from '@/lib/labels';
+import { useToast } from '@/components/ui/toast';
 import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee, SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
 import { SelectionActionModal } from '@/components/selection-action-modal';
 
@@ -41,6 +42,7 @@ export function WeekView({
     offices = []
 }: WeekViewProps) {
     const router = useRouter();
+    const toast = useToast();
 
     // Drag-to-select state
     const [selectionStart, setSelectionStart] = useState<Date | null>(null);
@@ -48,6 +50,11 @@ export function WeekView({
     const [isDragging, setIsDragging] = useState(false);
     const [showSelectionAction, setShowSelectionAction] = useState(false);
     const pointerOrigin = useRef<{ x: number; y: number } | null>(null);
+
+    // DnD reschedule state
+    const [draggedSchedule, setDraggedSchedule] = useState<{ schedule: SerializedScheduleWithAssignments; originalStart: Date; originalEnd: Date } | null>(null);
+    const [confirmReschedule, setConfirmReschedule] = useState<{ schedule: SerializedScheduleWithAssignments; newStart: Date; newEnd: Date } | null>(null);
+    const [isRescheduling, setIsRescheduling] = useState(false);
 
     const start = startOfWeek(initialDate, { weekStartsOn: 0 });
     const end = endOfWeek(initialDate, { weekStartsOn: 0 });
@@ -131,6 +138,73 @@ export function WeekView({
         return () => window.removeEventListener('pointerup', handleGlobalPointerUp);
     }, [isDragging, selectionStart]);
 
+    // --- DnD reschedule handlers ---
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+        if (isDragging || !canManage) return;
+        e.preventDefault();
+    };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
+        if (isDragging || !canManage || !draggedSchedule) return;
+        e.preventDefault();
+
+        const { schedule, originalStart, originalEnd } = draggedSchedule;
+        const durationMs = originalEnd.getTime() - originalStart.getTime();
+
+        const newStart = new Date(day);
+        newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+        const newEnd = new Date(newStart.getTime() + durationMs);
+
+        // Local-day comparison to avoid UTC off-by-one
+        const dayChanged = format(newStart, 'yyyy-MM-dd') !== format(originalStart, 'yyyy-MM-dd');
+
+        if (dayChanged) {
+            setConfirmReschedule({ schedule, newStart, newEnd });
+        }
+        setDraggedSchedule(null);
+    };
+
+    const executeReschedule = async () => {
+        if (!confirmReschedule) return;
+        setIsRescheduling(true);
+        try {
+            const res = await fetch(`/api/schedules/${confirmReschedule.schedule.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    startTime: confirmReschedule.newStart.toISOString(),
+                    endTime: confirmReschedule.newEnd.toISOString(),
+                }),
+            });
+
+            if (!res.ok) {
+                const data = await res.json();
+                toast.error(`Error: ${data.error || 'Conflict detected or update failed'}`);
+                setConfirmReschedule(null);
+                return;
+            }
+
+            toast.success('Schedule updated.');
+            setConfirmReschedule(null);
+            router.refresh();
+        } catch (err: any) {
+            toast.error(err.message || 'Error updating schedule');
+            setConfirmReschedule(null);
+        } finally {
+            setIsRescheduling(false);
+        }
+    };
+
+    // Scroll lock for confirm modal
+    useEffect(() => {
+        if (!confirmReschedule) return;
+        const originalStyle = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = originalStyle;
+        };
+    }, [confirmReschedule]);
+
     // Escape to clear selection
     useEffect(() => {
         const handleEscape = (e: KeyboardEvent) => {
@@ -138,6 +212,7 @@ export function WeekView({
                 setSelectionStart(null);
                 setSelectionEnd(null);
                 setShowSelectionAction(false);
+                if (!isRescheduling) setConfirmReschedule(null);
             }
         };
         window.addEventListener('keydown', handleEscape);
@@ -308,6 +383,8 @@ export function WeekView({
                                         onPointerDown={(e) => handleCellPointerDown(e, day)}
                                         onPointerMove={(e) => handleCellPointerMove(e, day)}
                                         onPointerUp={() => handleCellPointerUp(day)}
+                                        onDragOver={handleDragOver}
+                                        onDrop={(e) => handleDrop(e, day)}
                                     />
                                 );
                             })}
@@ -420,6 +497,33 @@ export function WeekView({
                                                     취소
                                                 </span>
                                             )}
+                                            {/* Drag Handle */}
+                                            {canManage && (
+                                                <div
+                                                    draggable={true}
+                                                    onDragStart={(e) => {
+                                                        e.stopPropagation();
+                                                        e.dataTransfer.effectAllowed = 'move';
+                                                        e.dataTransfer.setData('text/plain', schedule.id);
+
+                                                        const img = new Image();
+                                                        img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                                                        e.dataTransfer.setDragImage(img, 0, 0);
+
+                                                        setDraggedSchedule({
+                                                            schedule,
+                                                            originalStart: parseISO(schedule.startTime),
+                                                            originalEnd: parseISO(schedule.endTime)
+                                                        });
+                                                    }}
+                                                    onDragEnd={() => setDraggedSchedule(null)}
+                                                    className="ml-auto flex items-center justify-center w-4 cursor-grab hover:bg-black/10 rounded opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity"
+                                                    title="Drag to reschedule"
+                                                    aria-label="Drag to reschedule"
+                                                >
+                                                    <span className="text-[10px] select-none leading-none tracking-tighter" style={{ marginTop: '-2px' }}>⠿</span>
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className={isCancelled ? 'text-gray-400 mt-0.5 shrink-0 truncate' : 'text-slate-700 mt-0.5 shrink-0 truncate'}>
@@ -494,6 +598,68 @@ export function WeekView({
                     workTypes={workTypes}
                     offices={offices}
                 />
+            )}
+
+            {/* DnD Confirm Reschedule Modal */}
+            {confirmReschedule && (
+                <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="confirm-modal-title" role="dialog" aria-modal="true">
+                    <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div className="fixed inset-0 z-40 bg-transparent backdrop-blur-sm backdrop-brightness-90 transition-all" aria-hidden="true" onClick={() => !isRescheduling && setConfirmReschedule(null)}></div>
+                        <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        <div className="relative z-50 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="confirm-modal-title">
+                                    Confirm Reschedule
+                                </h3>
+                                <div className="mt-2 text-sm text-gray-600 space-y-3">
+                                    <p>Are you sure you want to move <strong>{confirmReschedule.schedule.title}</strong>?</p>
+                                    <div className="bg-gray-50 rounded p-3 border">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className="text-gray-500 w-12">From:</span>
+                                            <span className="font-medium text-red-600 line-through">
+                                                {format(parseISO(confirmReschedule.schedule.startTime), 'MMM d, yyyy HH:mm')} - {format(parseISO(confirmReschedule.schedule.endTime), 'HH:mm')}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-gray-500 w-12">To:</span>
+                                            <span className="font-medium text-green-700">
+                                                {format(confirmReschedule.newStart, 'MMM d, yyyy HH:mm')} - {format(confirmReschedule.newEnd, 'HH:mm')}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="rounded-md bg-amber-50 p-3 border border-amber-200 mt-4">
+                                        <div className="flex">
+                                            <div className="ml-3">
+                                                <h3 className="text-sm font-medium text-amber-800">Note</h3>
+                                                <div className="mt-1 text-sm text-amber-700">
+                                                    Per-day assignments are NOT automatically shifted. You will need to re-verify assignments manually after moving.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t">
+                                <button
+                                    type="button"
+                                    onClick={executeReschedule}
+                                    disabled={isRescheduling}
+                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
+                                >
+                                    {isRescheduling ? 'Saving...' : 'Confirm'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => !isRescheduling && setConfirmReschedule(null)}
+                                    disabled={isRescheduling}
+                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
