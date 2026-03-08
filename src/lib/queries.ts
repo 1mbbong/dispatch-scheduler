@@ -1,6 +1,7 @@
 import 'server-only';
 
 import prisma from '@/lib/db';
+import { SerializedScheduleWithAssignments } from '@/types';
 
 // ============================================
 // Server-only data access layer.
@@ -86,11 +87,16 @@ export async function getSchedules(tenantId: string, opts: GetSchedulesOptions =
             assignments: {
                 include: { employee: true },
             },
+            customerArea: true,
+            scheduleStatus: true,
+            workTypes: { include: { workType: true } },
         },
         orderBy: { startTime: 'asc' },
     });
 
-    return serialize(result);
+    // Explicitly cast to SerializedScheduleWithAssignments[] because Prisma's nested generic
+    // types inside include {} are too deep to be perfectly inferred by the mapped type.
+    return serialize(result) as unknown as SerializedScheduleWithAssignments[];
 }
 
 export async function getScheduleById(tenantId: string, id: string) {
@@ -103,10 +109,13 @@ export async function getScheduleById(tenantId: string, id: string) {
             assignments: {
                 include: { employee: true },
             },
+            customerArea: true,
+            scheduleStatus: true,
+            workTypes: { include: { workType: true } },
         },
     });
 
-    return result ? serialize(result) : null;
+    return (result ? serialize(result) : null) as unknown as SerializedScheduleWithAssignments | null;
 }
 
 export async function getOverlappingEmployeeEvents(
@@ -156,12 +165,98 @@ export async function getOverlappingEmployeeEvents(
     return serialize({ schedules, vacations });
 }
 
+export async function getScheduleAuditLogs(tenantId: string, scheduleId: string) {
+    const logs = await prisma.auditLog.findMany({
+        where: {
+            tenantId,
+            entityType: 'SCHEDULE',
+            entityId: scheduleId
+        },
+        orderBy: {
+            timestamp: 'asc' // Oldest first: "initial → changes → current"
+        }
+    });
+
+    // Extract unique user IDs locally (fast enough, avoid complex JOINs if userId is not strictly FK'd)
+    const userIds = Array.from(new Set(logs.map(log => log.userId).filter(Boolean))) as string[];
+
+    let usersMap: Record<string, { name: string, email: string }> = {};
+    if (userIds.length > 0) {
+        const users = await prisma.user.findMany({
+            where: {
+                id: { in: userIds },
+                tenantId
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true
+            }
+        });
+        usersMap = users.reduce((acc, user) => {
+            acc[user.id] = { name: user.name, email: user.email };
+            return acc;
+        }, {} as Record<string, { name: string, email: string }>);
+    }
+
+    // Attach user information to logs
+    const mappedLogs = logs.map(log => {
+        let actor = { name: 'System', email: '' }; // Default
+        if (log.userId && usersMap[log.userId]) {
+            actor = usersMap[log.userId];
+        }
+        return {
+            ...log,
+            actor
+        };
+    });
+
+    return serialize(mappedLogs);
+}
+
+export async function getLatestRescheduleSnapshots(tenantId: string, scheduleIds: string[]) {
+    if (scheduleIds.length === 0) return {};
+
+    // For MVP efficiency without raw SQL lateral joins, pull ALL schedule-related audit logs for these IDs 
+    // ordered by newest first, then manually reduce to the first one that changed times.
+    const logs = await prisma.auditLog.findMany({
+        where: {
+            tenantId,
+            entityType: 'SCHEDULE',
+            entityId: { in: scheduleIds }
+        },
+        orderBy: {
+            timestamp: 'desc'
+        }
+    });
+
+    const snapshots: Record<string, { prevStartTime: string, prevEndTime: string }> = {};
+
+    for (const log of logs) {
+        const id = log.entityId;
+        if (snapshots[id]) continue; // Already found the latest time change for this schedule
+
+        const oldD = log.oldData as any;
+        const newD = log.newData as any;
+
+        if (oldD && newD && (oldD.startTime !== newD.startTime || oldD.endTime !== newD.endTime)) {
+            snapshots[id] = {
+                prevStartTime: oldD.startTime,
+                prevEndTime: oldD.endTime
+            };
+        }
+    }
+
+    return serialize(snapshots);
+}
+
 // ---------- Employees ----------
 
 export async function getEmployees(tenantId: string) {
     const result = await prisma.employee.findMany({
         where: { tenantId, isActive: true },
         include: {
+            customerArea: true,
             _count: {
                 select: {
                     assignments: true,
@@ -186,6 +281,7 @@ export async function getEmployeesPaginated(
         prisma.employee.findMany({
             where,
             include: {
+                customerArea: true,
                 _count: { select: { assignments: true, vacations: true } },
             },
             orderBy: { name: 'asc' },
@@ -329,3 +425,165 @@ export async function getDashboardStats(tenantId: string) {
     });
 }
 
+// ---------- Labels (L1/L2) ----------
+
+export async function getCustomerAreas(tenantId: string, includeInactive = false) {
+    const where = {
+        tenantId,
+        ...(includeInactive ? {} : { isActive: true }),
+    };
+
+    const result = await prisma.customerArea.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+
+    return serialize(result);
+}
+
+export async function getScheduleStatuses(tenantId: string, includeInactive = false) {
+    const where = {
+        tenantId,
+        ...(includeInactive ? {} : { isActive: true }),
+    };
+
+    const result = await prisma.scheduleStatus.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+
+    return serialize(result);
+}
+
+export async function getWorkTypes(tenantId: string, includeInactive = false) {
+    const where = {
+        tenantId,
+        ...(includeInactive ? {} : { isActive: true }),
+    };
+
+    const result = await prisma.workType.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+
+    return serialize(result);
+}
+
+export async function getOffices(tenantId: string, includeInactive = false) {
+    const where = {
+        tenantId,
+        ...(includeInactive ? {} : { isActive: true }),
+    };
+
+    const result = await prisma.office.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+
+    return serialize(result);
+}
+
+// ---------- Availability ----------
+
+export async function getAvailabilitySummary(
+    tenantId: string,
+    targetDate: Date,
+    selectedAreas: string[] | null
+) {
+    const startDate = new Date(targetDate);
+    startDate.setHours(0, 0, 0, 0);
+
+    const endDate = new Date(targetDate);
+    endDate.setHours(23, 59, 59, 999);
+
+    const employeeWhere: any = {
+        tenantId,
+        isActive: true,
+    };
+
+    if (selectedAreas !== null) {
+        const hasUnassigned = selectedAreas.includes('unassigned');
+        const customIds = selectedAreas.filter((id) => id !== 'unassigned');
+
+        if (hasUnassigned && customIds.length > 0) {
+            employeeWhere.OR = [
+                { customerAreaId: { in: customIds } },
+                { customerAreaId: null },
+            ];
+        } else if (hasUnassigned) {
+            employeeWhere.customerAreaId = null;
+        } else if (customIds.length > 0) {
+            employeeWhere.customerAreaId = { in: customIds };
+        } else {
+            return { totalEmployees: 0, vacationCount: 0, overbookedCount: 0, availableCount: 0 };
+        }
+    }
+
+    const employees = await prisma.employee.findMany({
+        where: employeeWhere,
+        select: { id: true },
+    });
+
+    const employeeIds = employees.map((e) => e.id);
+
+    if (employeeIds.length === 0) {
+        return { totalEmployees: 0, vacationCount: 0, overbookedCount: 0, availableCount: 0 };
+    }
+
+    const vacations = await prisma.vacation.findMany({
+        where: {
+            employeeId: { in: employeeIds },
+            startDate: { lte: endDate },
+            endDate: { gte: startDate },
+        },
+        select: { employeeId: true },
+    });
+    const vacationEmployeeIds = new Set(vacations.map((v) => v.employeeId));
+
+    const overlappingSchedules = await prisma.assignment.findMany({
+        where: {
+            employeeId: { in: employeeIds },
+            schedule: {
+                tenantId,
+                status: 'ACTIVE',
+                startTime: { lt: endDate },
+                endTime: { gt: startDate },
+            },
+        },
+        select: { employeeId: true },
+    });
+    const scheduledEmployeeIds = new Set(overlappingSchedules.map((a) => a.employeeId));
+
+    const totalEmployees = employeeIds.length;
+    const vacationCount = vacationEmployeeIds.size;
+    const overbookedCount = scheduledEmployeeIds.size;
+
+    const unavailableSet = new Set([...vacationEmployeeIds, ...scheduledEmployeeIds]);
+    const availableCount = totalEmployees - unavailableSet.size;
+
+    return {
+        totalEmployees,
+        vacationCount,
+        overbookedCount,
+        availableCount,
+    };
+}
+
+// ---------- Filter Defaults ----------
+
+export interface FilterDefaults {
+    areas?: 'ALL' | string[];
+    unstaffed?: boolean;
+    loc?: { office: boolean; wfh: boolean; field: boolean };
+    ghosts?: boolean;
+    dayCounts?: boolean;
+    people?: number;
+}
+
+export async function getFilterDefaults(tenantId: string): Promise<FilterDefaults | null> {
+    const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { filterDefaults: true },
+    });
+    return (tenant?.filterDefaults as FilterDefaults) ?? null;
+}

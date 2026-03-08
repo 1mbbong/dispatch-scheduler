@@ -31,6 +31,10 @@ export async function POST(request: NextRequest) {
                 tenantId: auth.tenantId,
                 status: 'ACTIVE',
             },
+            include: {
+                customerArea: { select: { name: true } },
+                office: { select: { name: true } },
+            },
         });
 
         if (!schedule) {
@@ -51,7 +55,6 @@ export async function POST(request: NextRequest) {
         }
 
         // Validate that the requested date overlaps with the schedule's date range
-        // data.date sent from frontend is exactly local midnight represented in UTC
         const requestDayStart = new Date(data.date);
         const requestDayEnd = new Date(requestDayStart.getTime() + 24 * 60 * 60 * 1000);
 
@@ -59,57 +62,111 @@ export async function POST(request: NextRequest) {
             return forbiddenResponse('Assignment date must fall within the schedule date range');
         }
 
+        // Collect warnings for conflict override mode
+        const warnings: Array<{
+            type: 'ASSIGNMENT_CONFLICT' | 'VACATION_CONFLICT';
+            employeeId: string;
+            date: string;
+            conflicts: Array<{
+                scheduleId: string;
+                scheduleTitle: string;
+                startTime: string;
+                endTime: string;
+                workLocationType?: string;
+                officeName?: string;
+                customerAreaName?: string;
+            }>;
+        }> = [];
+
         // 3. Check for overlapping assignments on THIS SPECIFIC DATE
         const overlappingAssignments = await prisma.assignment.findMany({
             where: {
                 employeeId: data.employeeId,
-                date: requestDayStart, // Must be exactly the same day
-                // Overlap condition: existing.startTime < new.endTime AND existing.endTime > new.startTime
+                date: requestDayStart,
                 startTime: { lt: schedule.endTime },
                 endTime: { gt: schedule.startTime },
                 schedule: { status: 'ACTIVE' },
             },
             include: {
-                schedule: { select: { id: true, title: true, tenantId: true } },
+                schedule: {
+                    select: {
+                        id: true,
+                        title: true,
+                        tenantId: true,
+                        workLocationType: true,
+                        officeId: true,
+                        office: { select: { name: true } },
+                        customerArea: { select: { name: true } },
+                    },
+                },
             },
         });
 
-        const conflicts = overlappingAssignments.filter((a) => a.schedule.tenantId === auth.tenantId);
+        const assignmentConflicts = overlappingAssignments.filter((a: any) => a.schedule.tenantId === auth.tenantId);
 
-        if (conflicts.length > 0) {
-            return conflictResponse(
-                'Employee has overlapping assignments on this date',
-                conflicts.map((c) => ({
+        if (assignmentConflicts.length > 0) {
+            if (!data.allowConflicts) {
+                return conflictResponse(
+                    'Employee has overlapping assignments on this date',
+                    assignmentConflicts.map((c: any) => ({
+                        scheduleId: c.schedule.id,
+                        scheduleTitle: c.schedule.title,
+                        startTime: c.startTime.toISOString(),
+                        endTime: c.endTime.toISOString(),
+                    })),
+                    'ASSIGNMENT_CONFLICT'
+                );
+            }
+            warnings.push({
+                type: 'ASSIGNMENT_CONFLICT',
+                employeeId: data.employeeId,
+                date: requestDayStart.toISOString(),
+                conflicts: assignmentConflicts.map((c: any) => ({
                     scheduleId: c.schedule.id,
                     scheduleTitle: c.schedule.title,
                     startTime: c.startTime.toISOString(),
                     endTime: c.endTime.toISOString(),
+                    workLocationType: c.schedule.workLocationType || undefined,
+                    officeName: c.schedule.office?.name || undefined,
+                    customerAreaName: c.schedule.customerArea?.name || undefined,
                 })),
-                'ASSIGNMENT_CONFLICT'
-            );
+            });
         }
 
         // 4. Check for vacation conflicts on THIS SPECIFIC DATE
         const vacationConflicts = await prisma.vacation.findMany({
             where: {
                 employeeId: data.employeeId,
-                // Overlap: vacation.startDate < requestDayEnd AND vacation.endDate >= requestDayStart
                 startDate: { lt: requestDayEnd },
                 endDate: { gte: requestDayStart },
             },
         });
 
         if (vacationConflicts.length > 0) {
-            return conflictResponse(
-                'Employee is on vacation on this date',
-                vacationConflicts.map((v) => ({
+            if (!data.allowConflicts) {
+                return conflictResponse(
+                    'Employee is on vacation on this date',
+                    vacationConflicts.map((v) => ({
+                        scheduleId: data.scheduleId,
+                        scheduleTitle: schedule.title,
+                        startTime: v.startDate.toISOString(),
+                        endTime: v.endDate.toISOString(),
+                    })),
+                    'VACATION_CONFLICT'
+                );
+            }
+            // Collect as warning
+            warnings.push({
+                type: 'VACATION_CONFLICT',
+                employeeId: data.employeeId,
+                date: requestDayStart.toISOString(),
+                conflicts: vacationConflicts.map((v) => ({
                     scheduleId: data.scheduleId,
                     scheduleTitle: schedule.title,
                     startTime: v.startDate.toISOString(),
                     endTime: v.endDate.toISOString(),
                 })),
-                'VACATION_CONFLICT'
-            );
+            });
         }
 
         // 5. Create assignment with the specific date
@@ -127,23 +184,35 @@ export async function POST(request: NextRequest) {
             },
         });
 
-        // Audit log
+        // Audit log (enriched when conflicts were overridden)
+        const auditNewData: Record<string, unknown> = toAuditData({
+            scheduleId: assignment.scheduleId,
+            scheduleTitle: assignment.schedule.title,
+            employeeId: assignment.employeeId,
+            employeeName: assignment.employee.name,
+            date: assignment.date,
+            startTime: assignment.startTime,
+            endTime: assignment.endTime,
+        });
+
+        if (warnings.length > 0) {
+            auditNewData.conflictOverride = true;
+            auditNewData.conflictWarnings = warnings;
+        }
+
         await createAuditLog({
             tenantId: auth.tenantId,
             userId: auth.user.userId,
             action: AuditAction.ASSIGN_EMPLOYEE,
             entityType: EntityType.ASSIGNMENT,
             entityId: assignment.id,
-            newData: toAuditData({
-                scheduleId: assignment.scheduleId,
-                scheduleTitle: assignment.schedule.title,
-                employeeId: assignment.employeeId,
-                employeeName: assignment.employee.name,
-                date: assignment.date,
-                startTime: assignment.startTime,
-                endTime: assignment.endTime,
-            }),
+            newData: auditNewData,
         });
+
+        // Return with warnings if any
+        if (warnings.length > 0) {
+            return createdResponse({ assignment, warnings });
+        }
 
         return createdResponse(assignment);
     } catch (error) {

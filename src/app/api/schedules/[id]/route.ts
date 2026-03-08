@@ -27,6 +27,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
             },
             include: {
                 category: true,
+                customerArea: true,
+                scheduleStatus: true,
+                workTypes: {
+                    include: { workType: true }
+                },
                 assignments: {
                     include: {
                         employee: {
@@ -84,9 +89,21 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                     ...(data.endTime && { endTime: data.endTime }),
                     ...(data.status && { status: data.status }),
                     ...(data.categoryId !== undefined && { categoryId: data.categoryId }),
+                    ...(data.customerAreaId !== undefined && { customerAreaId: data.customerAreaId }),
+                    ...(data.statusId !== undefined && { statusId: data.statusId }),
+                    ...(data.workLocationType !== undefined && { workLocationType: data.workLocationType }),
+                    // Safely strip officeId when workLocationType is toggled off OFFICE recursively
+                    ...(data.workLocationType !== undefined ?
+                        { officeId: data.workLocationType === 'OFFICE' ? data.officeId : null } :
+                        (data.officeId !== undefined && { officeId: data.officeId })
+                    ),
                 },
                 include: {
                     category: true,
+                    customerArea: true,
+                    scheduleStatus: true,
+                    workTypes: { include: { workType: true } },
+                    office: true,
                     assignments: {
                         include: {
                             employee: {
@@ -96,6 +113,24 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                     },
                 },
             });
+
+            // Update Many-to-Many WorkTypes if array is provided
+            if (data.workTypeIds !== undefined) {
+                // Delete existing bindings
+                await tx.scheduleWorkType.deleteMany({
+                    where: { scheduleId: id }
+                });
+
+                // Attach new bindings if array isn't empty
+                if (data.workTypeIds.length > 0) {
+                    await tx.scheduleWorkType.createMany({
+                        data: data.workTypeIds.map((typeId: string) => ({
+                            scheduleId: id,
+                            workTypeId: typeId
+                        }))
+                    });
+                }
+            }
 
             // Update denormalized times on assignments if schedule time changed
             if (timeChanged) {
@@ -133,6 +168,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                 endTime: existing.endTime,
                 status: existing.status,
                 categoryId: existing.categoryId,
+                customerAreaId: existing.customerAreaId,
+                statusId: existing.statusId,
+                workLocationType: existing.workLocationType,
+                officeId: existing.officeId,
             }),
             newData: toAuditData({
                 title: updatedSchedule.title,
@@ -141,6 +180,11 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                 endTime: updatedSchedule.endTime,
                 status: updatedSchedule.status,
                 categoryId: updatedSchedule.categoryId,
+                customerAreaId: updatedSchedule.customerAreaId,
+                statusId: updatedSchedule.statusId,
+                workTypeIds: data.workTypeIds,
+                workLocationType: updatedSchedule.workLocationType,
+                officeId: updatedSchedule.officeId,
             }),
         });
 

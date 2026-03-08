@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
     format,
@@ -13,8 +13,11 @@ import {
     parseISO
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee } from '@/types';
-import { CalendarCellQuickCreate } from '@/components/calendar-cell-quick-create';
+import { isCancelledStatus } from '@/lib/labels';
+import { useToast } from '@/components/ui/toast';
+import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee, SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
+import { SelectionActionModal } from '@/components/selection-action-modal';
+import { getDnDEligibility } from '@/lib/dnd/eligibility';
 
 interface WeekViewProps {
     initialDate: Date;
@@ -22,14 +25,53 @@ interface WeekViewProps {
     employees: SerializedEmployeeWithStats[];
     vacations: SerializedVacationWithEmployee[];
     canManage: boolean;
+    customerAreas?: SerializedCustomerArea[];
+    scheduleStatuses?: SerializedScheduleStatus[];
+    workTypes?: SerializedWorkType[];
+    offices?: { id: string, name: string }[];
+    peopleLevel?: number;
 }
 
-export function WeekView({ initialDate, schedules, employees, vacations, canManage }: WeekViewProps) {
+export function WeekView({
+    initialDate,
+    schedules,
+    employees,
+    vacations,
+    canManage,
+    customerAreas = [],
+    scheduleStatuses = [],
+    workTypes = [],
+    offices = [],
+    peopleLevel = 0,
+}: WeekViewProps) {
     const router = useRouter();
+    const toast = useToast();
+
+    // Drag-to-select state
+    const [selectionStart, setSelectionStart] = useState<Date | null>(null);
+    const [selectionEnd, setSelectionEnd] = useState<Date | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
+    const [showSelectionAction, setShowSelectionAction] = useState(false);
+    const pointerOrigin = useRef<{ x: number; y: number } | null>(null);
+
+    // DnD reschedule state
+    const [draggedSchedule, setDraggedSchedule] = useState<{ schedule: SerializedScheduleWithAssignments; originalStart: Date; originalEnd: Date } | null>(null);
+    const [confirmReschedule, setConfirmReschedule] = useState<{ schedule: SerializedScheduleWithAssignments; newStart: Date; newEnd: Date } | null>(null);
+    const [isRescheduling, setIsRescheduling] = useState(false);
+
+    const lastToastTime = useRef<number>(0);
 
     const start = startOfWeek(initialDate, { weekStartsOn: 0 });
     const end = endOfWeek(initialDate, { weekStartsOn: 0 });
     const days = eachDayOfInterval({ start, end });
+
+    // Normalised range (always start <= end)
+    const rangeStart = selectionStart && selectionEnd
+        ? (selectionStart <= selectionEnd ? selectionStart : selectionEnd)
+        : null;
+    const rangeEnd = selectionStart && selectionEnd
+        ? (selectionStart <= selectionEnd ? selectionEnd : selectionStart)
+        : null;
 
     const handlePrevWeek = () => {
         const newDate = subWeeks(initialDate, 1);
@@ -45,6 +87,147 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
         router.push(`?date=${format(new Date(), 'yyyy-MM-dd')}`);
     };
 
+    const handleCellPointerDown = (e: React.PointerEvent, day: Date) => {
+        if (e.button !== 0) return;
+        pointerOrigin.current = { x: e.clientX, y: e.clientY };
+        setSelectionStart(day);
+        setSelectionEnd(day);
+        setIsDragging(false);
+        setShowSelectionAction(false);
+    };
+
+    const handleCellPointerMove = (e: React.PointerEvent, day: Date) => {
+        if (!pointerOrigin.current) return;
+        const dx = Math.abs(e.clientX - pointerOrigin.current.x);
+        const dy = Math.abs(e.clientY - pointerOrigin.current.y);
+        if (dx > 6 || dy > 6) {
+            if (!isDragging) setIsDragging(true);
+            setSelectionEnd(day);
+        }
+    };
+
+    const handleCellPointerUp = (day: Date) => {
+        if (!pointerOrigin.current) return;
+
+        if (isDragging) {
+            // Finished dragging — show selection action for the range
+            setSelectionEnd(day);
+        } else {
+            // Click (no drag) — treat as single-day selection (matches MonthView)
+            setSelectionStart(day);
+            setSelectionEnd(day);
+        }
+
+        // Both click and drag open SelectionActionModal
+        if (canManage) setShowSelectionAction(true);
+
+        pointerOrigin.current = null;
+        setIsDragging(false);
+    };
+
+    // Global pointer-up to catch releases outside cells
+    useEffect(() => {
+        const handleGlobalPointerUp = () => {
+            if (pointerOrigin.current) {
+                if (isDragging && selectionStart) {
+                    setShowSelectionAction(true);
+                } else {
+                    setSelectionStart(null);
+                    setSelectionEnd(null);
+                }
+                pointerOrigin.current = null;
+                setIsDragging(false);
+            }
+            if (draggedSchedule) {
+                setDraggedSchedule(null);
+            }
+        };
+        window.addEventListener('pointerup', handleGlobalPointerUp);
+        return () => window.removeEventListener('pointerup', handleGlobalPointerUp);
+    }, [isDragging, selectionStart, draggedSchedule]);
+
+    // --- DnD reschedule handlers ---
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
+        if (!canManage || !draggedSchedule) return;
+        e.preventDefault();
+    };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
+        if (!canManage || !draggedSchedule) return;
+        e.preventDefault();
+
+        const { schedule, originalStart, originalEnd } = draggedSchedule;
+        const durationMs = originalEnd.getTime() - originalStart.getTime();
+
+        const newStart = new Date(day);
+        newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+        const newEnd = new Date(newStart.getTime() + durationMs);
+
+        // Local-day comparison to avoid UTC off-by-one
+        const dayChanged = format(newStart, 'yyyy-MM-dd') !== format(originalStart, 'yyyy-MM-dd');
+
+        if (dayChanged) {
+            setConfirmReschedule({ schedule, newStart, newEnd });
+        }
+        setDraggedSchedule(null);
+    };
+
+    const executeReschedule = async () => {
+        if (!confirmReschedule) return;
+        setIsRescheduling(true);
+        try {
+            const res = await fetch(`/api/schedules/${confirmReschedule.schedule.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    startTime: confirmReschedule.newStart.toISOString(),
+                    endTime: confirmReschedule.newEnd.toISOString(),
+                }),
+            });
+
+            if (!res.ok) {
+                const data = await res.json();
+                toast.error(`Error: ${data.error || 'Conflict detected or update failed'}`);
+                setConfirmReschedule(null);
+                return;
+            }
+
+            toast.success('Schedule updated.');
+            setConfirmReschedule(null);
+            router.refresh();
+        } catch (err: any) {
+            toast.error(err.message || 'Error updating schedule');
+            setConfirmReschedule(null);
+        } finally {
+            setIsRescheduling(false);
+        }
+    };
+
+    // Scroll lock for confirm modal
+    useEffect(() => {
+        if (!confirmReschedule) return;
+        const originalStyle = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = originalStyle;
+        };
+    }, [confirmReschedule]);
+
+    // Escape to clear selection
+    useEffect(() => {
+        const handleEscape = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setSelectionStart(null);
+                setSelectionEnd(null);
+                setShowSelectionAction(false);
+                if (!isRescheduling) setConfirmReschedule(null);
+                setDraggedSchedule(null);
+            }
+        };
+        window.addEventListener('keydown', handleEscape);
+        return () => window.removeEventListener('keydown', handleEscape);
+    }, []);
+
     const weekSchedules = useMemo(() => {
         const blocks = [];
 
@@ -53,6 +236,8 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
         schedules.forEach(s => uniqueSchedules.set(s.id, s));
 
         for (const schedule of Array.from(uniqueSchedules.values())) {
+            const isOriginalDragged = draggedSchedule ? schedule.id === draggedSchedule.schedule.id : false;
+
             const sStart = parseISO(schedule.startTime);
             const sEnd = parseISO(schedule.endTime);
 
@@ -81,6 +266,7 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                     endsAfterWeek: sEnd > end,
                     startTime: sStart,
                     endTime: sEnd,
+                    isOriginalDragged
                 });
             }
         }
@@ -90,11 +276,13 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
             if (a.startTime.getTime() !== b.startTime.getTime()) {
                 return a.startTime.getTime() - b.startTime.getTime();
             }
-            return (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
+            const durationDiff = (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
+            if (durationDiff !== 0) return durationDiff;
+            return 0;
         });
 
         return blocks;
-    }, [schedules, days, start, end]);
+    }, [schedules, days, start, end, draggedSchedule]);
 
     const weekVacations = useMemo(() => {
         const blocks = [];
@@ -184,9 +372,27 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                                     <p className={cn("text-lg font-medium text-gray-900", isToday && "text-blue-600")}>
                                         {format(day, 'd')}
                                     </p>
-                                    {canManage && (
-                                        <CalendarCellQuickCreate date={day} employees={employees} />
-                                    )}
+                                    {peopleLevel >= 2 && (() => {
+                                        const dayD = new Date(day); dayD.setHours(0, 0, 0, 0);
+                                        const dayE = new Date(day); dayE.setHours(23, 59, 59, 999);
+                                        const vacOnDay = vacations.filter(v => {
+                                            const vs = new Date(v.startDate); const ve = new Date(v.endDate);
+                                            return vs < dayE && ve > dayD;
+                                        }).length;
+                                        const schedEmps = new Set(
+                                            schedules.filter(s => {
+                                                const ss = new Date(s.startTime); const se = new Date(s.endTime);
+                                                return ss < dayE && se > dayD;
+                                            }).flatMap(s => s.assignments?.map((a: any) => a.employee?.id) || [])
+                                        ).size;
+                                        const avail = Math.max(0, employees.length - vacOnDay - schedEmps);
+                                        return (
+                                            <div className="flex gap-0.5 mt-0.5 justify-center">
+                                                <span className="text-[8px] px-0.5 rounded bg-green-50 text-green-700">A:{avail}</span>
+                                                {vacOnDay > 0 && <span className="text-[8px] px-0.5 rounded bg-amber-50 text-amber-600">V:{vacOnDay}</span>}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             );
                         })}
@@ -196,12 +402,28 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                     <div className="flex-1 relative">
                         {/* Background columns for clicks & borders */}
                         <div className="absolute inset-0 grid grid-cols-7 divide-x pointer-events-none">
-                            {days.map(day => (
-                                <div
-                                    key={format(day, 'yyyy-MM-dd')}
-                                    className="h-full bg-gray-50/30 pointer-events-auto"
-                                />
-                            ))}
+                            {days.map(day => {
+                                const isSelected = selectionStart && selectionEnd && (isDragging || showSelectionAction) && (
+                                    (day >= selectionStart && day <= selectionEnd) ||
+                                    (day <= selectionStart && day >= selectionEnd)
+                                );
+
+                                return (
+                                    <div
+                                        key={format(day, 'yyyy-MM-dd')}
+                                        className={cn(
+                                            "h-full pointer-events-auto relative cursor-cell select-none transition-colors",
+                                            isSelected ? "bg-indigo-50/60" : "bg-gray-50/30 hover:bg-gray-100/50"
+                                        )}
+                                        onPointerDown={(e) => handleCellPointerDown(e, day)}
+                                        onPointerMove={(e) => handleCellPointerMove(e, day)}
+                                        onPointerUp={() => handleCellPointerUp(day)}
+                                        // Legacy cell-level drops, kept for safety when draggedSchedule misses
+                                        onDragOver={(e) => handleDragOver(e, day)}
+                                        onDrop={(e) => handleDrop(e, day)}
+                                    />
+                                );
+                            })}
                         </div>
 
                         {/* Vacation Layer (z-0) Underneath schedules */}
@@ -227,10 +449,12 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                         </div>
 
                         {/* Spanning blocks Grid (z-10) */}
-                        <div className="relative z-10 grid grid-cols-7 gap-y-2 p-2 pointer-events-none">
+                        <div className="relative z-10 grid grid-cols-7 gap-y-2 p-2">
                             {weekSchedules.map(block => {
                                 const schedule = block.schedule;
-                                const categoryColor = schedule.category ? (schedule.category as any).color : '#6366f1';
+
+                                const isCancelled = isCancelledStatus(schedule.scheduleStatus);
+                                const categoryColor = schedule.customerArea ? (schedule.customerArea as any).color : '#6366f1';
 
                                 let timeLabel = '';
                                 if (isSameDay(block.startTime, block.endTime)) {
@@ -243,25 +467,29 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                                     <div
                                         key={schedule.id}
                                         className={cn(
-                                            "group relative flex flex-col p-2 text-xs border shadow-sm hover:shadow-md transition-shadow cursor-pointer pointer-events-auto focus:outline-none focus:ring-2 focus:ring-indigo-500",
+                                            "group relative flex flex-col p-2 text-xs border shadow-sm hover:shadow-md transition-shadow cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500",
                                             block.startsBeforeWeek ? "rounded-l-sm border-l" : "rounded-l-md",
-                                            block.endsAfterWeek ? "rounded-r-sm border-r" : "rounded-r-md"
+                                            block.endsAfterWeek ? "rounded-r-sm border-r" : "rounded-r-md",
+                                            block.isOriginalDragged && "opacity-0 pointer-events-none",
+                                            (!block.isOriginalDragged && !!draggedSchedule) ? "pointer-events-none" : "pointer-events-auto"
                                         )}
                                         style={{
                                             gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
                                             borderLeftWidth: block.startsBeforeWeek ? '1px' : '4px',
                                             borderColor: categoryColor,
                                             backgroundColor: `${categoryColor}10`,
-                                            ...(schedule.status === 'CANCELLED' ? {
+                                            ...(isCancelled ? {
                                                 opacity: 0.6,
                                                 borderStyle: 'dashed',
                                                 backgroundColor: '#f9fafb',
-                                                borderColor: '#d1d5db'
+                                                borderColor: '#d1d5db',
+                                                borderLeftColor: '#9ca3af'
                                             } : {})
                                         }}
                                         role="button"
                                         tabIndex={0}
                                         aria-label={`Schedule: ${schedule.title}, ${timeLabel}`}
+                                        onPointerDown={(e) => e.stopPropagation()} // Prevent cell click logic
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             router.push(`/schedules/${schedule.id}`);
@@ -274,41 +502,144 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                                             }
                                         }}
                                     >
-                                        <div className={`font-semibold truncate ${schedule.status === 'CANCELLED' ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
-                                            {schedule.title}
+                                        <div className="flex items-center gap-1 overflow-hidden shrink-0">
+                                            {(() => {
+                                                const wlt = (schedule as any).workLocationType;
+                                                const chip = wlt === 'OFFICE' && (schedule as any).office?.name
+                                                    ? (schedule as any).office.name
+                                                    : wlt === 'REMOTE' ? 'WFH'
+                                                        : (schedule.customerArea as any)?.name || null;
+                                                return chip ? (
+                                                    <span className="shrink-0 text-[9px] px-1 rounded bg-slate-100 border border-slate-200 text-slate-600 font-medium">
+                                                        {chip}
+                                                    </span>
+                                                ) : null;
+                                            })()}
+                                            <div className={cn("font-semibold truncate", isCancelled ? 'text-gray-500 line-through' : 'text-gray-900')}>
+                                                {schedule.title}
+                                            </div>
+                                            {/* Status Badge */}
+                                            {schedule.scheduleStatus && !isCancelled && (
+                                                <span
+                                                    className="shrink-0 text-[9px] px-1 rounded border"
+                                                    style={{
+                                                        color: (schedule.scheduleStatus as any).color || '#374151',
+                                                        borderColor: (schedule.scheduleStatus as any).color || '#d1d5db',
+                                                        backgroundColor: `${(schedule.scheduleStatus as any).color || '#6b7280'}15`
+                                                    }}>
+                                                    {(schedule.scheduleStatus as any).name}
+                                                </span>
+                                            )}
+                                            {/* Cancelled Marker */}
+                                            {isCancelled && (
+                                                <span className="shrink-0 text-[8px] px-1 rounded border border-gray-300 text-gray-500 bg-gray-100 uppercase tracking-wider">
+                                                    취소
+                                                </span>
+                                            )}
+                                            {/* Drag Handle */}
+                                            {(() => {
+                                                const eligibility = getDnDEligibility(schedule, canManage);
+                                                return (
+                                                    <div
+                                                        draggable={eligibility.draggable}
+                                                        onPointerDown={(e) => {
+                                                            if (!eligibility.draggable) {
+                                                                const now = Date.now();
+                                                                if (now - lastToastTime.current > 1200) {
+                                                                    toast.error(eligibility.reason || '이동할 수 없는 항목입니다.');
+                                                                    lastToastTime.current = now;
+                                                                }
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                            } else {
+                                                                // DO NOTHING (allow native HTML drag)
+                                                            }
+                                                        }}
+                                                        onDragStart={(e) => {
+                                                            if (!eligibility.draggable) {
+                                                                e.preventDefault();
+                                                                return;
+                                                            }
+                                                            e.stopPropagation();
+
+                                                            const img = new Image();
+                                                            img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                                                            e.dataTransfer.setDragImage(img, 0, 0);
+
+                                                            setDraggedSchedule({
+                                                                schedule,
+                                                                originalStart: parseISO(schedule.startTime),
+                                                                originalEnd: parseISO(schedule.endTime)
+                                                            });
+                                                        }}
+                                                        onDragEnd={() => {
+                                                            setDraggedSchedule(null);
+                                                        }}
+                                                        className={cn(
+                                                            "ml-auto flex items-center justify-center w-4 rounded transition-opacity",
+                                                            eligibility.draggable
+                                                                ? "cursor-grab hover:bg-black/10 opacity-0 group-hover:opacity-60 hover:!opacity-100"
+                                                                : "cursor-not-allowed opacity-30"
+                                                        )}
+                                                        title={eligibility.draggable ? "Drag to reschedule" : eligibility.reason}
+                                                        aria-label={eligibility.draggable ? "Drag to reschedule" : "Cannot reschedule"}
+                                                    >
+                                                        <span className="text-[10px] select-none leading-none tracking-tighter" style={{ marginTop: '-2px' }}>⠿</span>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
-                                        <div className={schedule.status === 'CANCELLED' ? 'text-gray-400 mb-1 truncate' : 'text-gray-500 mb-1 truncate'}>
-                                            {schedule.category && (
-                                                <span className="font-medium mr-1" style={{ color: schedule.status === 'CANCELLED' ? 'inherit' : categoryColor }}>
-                                                    [{(schedule.category as any).name}]
+
+                                        <div className={isCancelled ? 'text-gray-400 mt-0.5 shrink-0 truncate' : 'text-slate-700 mt-0.5 shrink-0 truncate'}>
+                                            {schedule.customerArea && (
+                                                <span className="font-medium mr-1" style={{ color: isCancelled ? 'inherit' : categoryColor }}>
+                                                    [{(schedule.customerArea as any).name}]
                                                 </span>
                                             )}
                                             {timeLabel}
                                         </div>
 
+                                        {/* Work Types */}
+                                        {schedule.workTypes && schedule.workTypes.length > 0 && (
+                                            <div className="flex flex-wrap items-center gap-1 mt-1 shrink-0 overflow-hidden">
+                                                {schedule.workTypes.slice(0, 2).map((wt: any) => (
+                                                    <span key={wt.workType.id} className="text-[9px] px-1.5 rounded bg-black/5 border border-black/10 text-gray-600 truncate max-w-[80px]">
+                                                        {wt.workType.name}
+                                                    </span>
+                                                ))}
+                                                {schedule.workTypes.length > 2 && (
+                                                    <span className="text-[9px] px-1 rounded bg-black/5 border border-black/10 text-gray-600">
+                                                        +{schedule.workTypes.length - 2}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
+
                                         {/* Assignments inline/overlap container */}
-                                        <div className="flex flex-wrap items-center mt-1 gap-1">
-                                            {schedule.assignments.length > 0 ? (
-                                                <div className="flex -space-x-1 overflow-hidden shrink-0">
-                                                    {schedule.assignments.map(a => (
-                                                        <div
-                                                            key={a.id}
-                                                            className="inline-block h-5 w-5 rounded-full ring-2 ring-white bg-indigo-100 flex items-center justify-center text-[9px] font-bold text-indigo-700"
-                                                            title={a.employee.name}
-                                                        >
-                                                            {a.employee.name.charAt(0)}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            ) : (
-                                                <span className="text-orange-500 italic text-[10px]">Unassigned</span>
-                                            )}
-                                            {schedule.assignments.length > 5 && (
-                                                <span className="text-[10px] text-gray-500 ml-1">
-                                                    +{schedule.assignments.length - 5}
-                                                </span>
-                                            )}
-                                        </div>
+                                        {peopleLevel >= 1 && (
+                                            <div className="flex flex-wrap items-center mt-1 gap-1">
+                                                {schedule.assignments.length > 0 ? (
+                                                    <div className="flex -space-x-1 overflow-hidden shrink-0">
+                                                        {schedule.assignments.map(a => (
+                                                            <div
+                                                                key={a.id}
+                                                                className="inline-block h-5 w-5 rounded-full ring-2 ring-white bg-indigo-100 flex items-center justify-center text-[9px] font-bold text-indigo-700"
+                                                                title={a.employee.name}
+                                                            >
+                                                                {a.employee.name.charAt(0)}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-orange-500 italic text-[10px]">Unassigned</span>
+                                                )}
+                                                {schedule.assignments.length > 5 && (
+                                                    <span className="text-[10px] text-gray-500 ml-1">
+                                                        +{schedule.assignments.length - 5}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -316,6 +647,86 @@ export function WeekView({ initialDate, schedules, employees, vacations, canMana
                     </div>
                 </div>
             </div>
+
+            {/* Range Selection Action Modal */}
+            {showSelectionAction && rangeStart && rangeEnd && (
+                <SelectionActionModal
+                    startDate={rangeStart}
+                    endDate={rangeEnd}
+                    employees={employees}
+                    onClose={() => {
+                        setShowSelectionAction(false);
+                        setSelectionStart(null);
+                        setSelectionEnd(null);
+                    }}
+                    customerAreas={customerAreas}
+                    scheduleStatuses={scheduleStatuses}
+                    workTypes={workTypes}
+                    offices={offices}
+                />
+            )}
+
+            {/* DnD Confirm Reschedule Modal */}
+            {confirmReschedule && (
+                <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="confirm-modal-title" role="dialog" aria-modal="true">
+                    <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div className="fixed inset-0 z-40 bg-transparent backdrop-blur-sm backdrop-brightness-90 transition-all" aria-hidden="true" onClick={() => !isRescheduling && setConfirmReschedule(null)}></div>
+                        <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        <div className="relative z-50 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="confirm-modal-title">
+                                    Confirm Reschedule
+                                </h3>
+                                <div className="mt-2 text-sm text-gray-600 space-y-3">
+                                    <p>Are you sure you want to move <strong>{confirmReschedule.schedule.title}</strong>?</p>
+                                    <div className="bg-gray-50 rounded p-3 border">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className="text-gray-500 w-12">From:</span>
+                                            <span className="font-medium text-red-600 line-through">
+                                                {format(parseISO(confirmReschedule.schedule.startTime), 'MMM d, yyyy HH:mm')} - {format(parseISO(confirmReschedule.schedule.endTime), 'HH:mm')}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-gray-500 w-12">To:</span>
+                                            <span className="font-medium text-green-700">
+                                                {format(confirmReschedule.newStart, 'MMM d, yyyy HH:mm')} - {format(confirmReschedule.newEnd, 'HH:mm')}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="rounded-md bg-amber-50 p-3 border border-amber-200 mt-4">
+                                        <div className="flex">
+                                            <div className="ml-3">
+                                                <h3 className="text-sm font-medium text-amber-800">Note</h3>
+                                                <div className="mt-1 text-sm text-amber-700">
+                                                    Per-day assignments are NOT automatically shifted. You will need to re-verify assignments manually after moving.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse border-t">
+                                <button
+                                    type="button"
+                                    onClick={executeReschedule}
+                                    disabled={isRescheduling}
+                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
+                                >
+                                    {isRescheduling ? 'Saving...' : 'Confirm'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => !isRescheduling && setConfirmReschedule(null)}
+                                    disabled={isRescheduling}
+                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

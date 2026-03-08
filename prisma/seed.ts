@@ -143,6 +143,86 @@ async function main() {
     }
     console.log(`   Categories: ${createdCategories} new categories planted.`);
 
+    console.log('🌱 Syncing offices...');
+    const officesToSeed = [
+        { name: 'HQ', sortOrder: 1 },
+        { name: 'CCE', sortOrder: 2 },
+    ];
+    let createdOffices = 0;
+    for (const office of officesToSeed) {
+        const existingOffice = await prisma.office.findUnique({
+            where: {
+                tenantId_name: {
+                    tenantId: tenant.id,
+                    name: office.name,
+                }
+            }
+        });
+
+        if (!existingOffice) {
+            await prisma.office.create({
+                data: {
+                    tenantId: tenant.id,
+                    name: office.name,
+                    sortOrder: office.sortOrder,
+                }
+            });
+            createdOffices++;
+        }
+    }
+    console.log(`   Offices: ${createdOffices} new offices established.`);
+
+    console.log('🌱 Syncing L1 label system defaults...');
+    const PASTEL_PALETTE = [
+        '#fecaca', '#fed7aa', '#fde047', '#d9f99d', '#bbf7d0',
+        '#a7f3d0', '#99f6e4', '#a5f3fc', '#bae6fd', '#bfdbfe',
+        '#c7d2fe', '#ddd6fe', '#e9d5ff', '#fbcfe8'
+    ];
+
+    const customerAreas = [
+        { name: 'Area A', color: PASTEL_PALETTE[0], sortOrder: 1 },
+        { name: 'Area B', color: PASTEL_PALETTE[1], sortOrder: 2 },
+        { name: 'Area C', color: PASTEL_PALETTE[2], sortOrder: 3 },
+    ];
+    for (const ca of customerAreas) {
+        await prisma.customerArea.upsert({
+            where: { tenantId_name: { tenantId: tenant.id, name: ca.name } },
+            update: {},
+            create: { tenantId: tenant.id, ...ca }
+        });
+    }
+
+    const scheduleStatuses = [
+        { name: '확정', color: PASTEL_PALETTE[4], sortOrder: 1, isCanceled: false },
+        { name: '미확정', color: PASTEL_PALETTE[7], sortOrder: 2, isCanceled: false },
+        { name: '연기(날짜확정)', color: PASTEL_PALETTE[2], sortOrder: 3, isCanceled: false },
+        { name: '연기(날짜미확정)', color: PASTEL_PALETTE[1], sortOrder: 4, isCanceled: false },
+        { name: '취소', color: PASTEL_PALETTE[0], sortOrder: 5, isCanceled: true },
+    ];
+    for (const st of scheduleStatuses) {
+        await prisma.scheduleStatus.upsert({
+            where: { tenantId_name: { tenantId: tenant.id, name: st.name } },
+            update: { isCanceled: st.isCanceled },
+            create: { tenantId: tenant.id, ...st }
+        });
+    }
+
+    const workTypes = [
+        { name: '설치', sortOrder: 1 },
+        { name: '철수', sortOrder: 2 },
+        { name: '이동', sortOrder: 3 },
+        { name: '수리', sortOrder: 4 },
+        { name: '점검', sortOrder: 5 },
+    ];
+    for (const wt of workTypes) {
+        await prisma.workType.upsert({
+            where: { tenantId_name: { tenantId: tenant.id, name: wt.name } },
+            update: {},
+            create: { tenantId: tenant.id, ...wt }
+        });
+    }
+    console.log('   Label System: Upserted templates for Customer Areas, Statuses, and Work Types.');
+
     console.log('✅ Seed complete!');
     console.log(`   Tenant: ${tenant.name} (${tenant.id})`);
     console.log(`   Admin:  ${adminEmail} / password123`);

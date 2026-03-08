@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { SerializedVacationWithEmployee, SerializedEmployeeWithStats } from '@/types';
 import { VacationForm } from './vacation-form';
@@ -33,12 +33,46 @@ export function VacationList({ initialVacations, employees, canManage, page, tot
         setIsModalOpen(true);
     };
 
+    const [isDirty, setIsDirty] = useState(false);
+
     const closeModal = () => {
-        setIsModalOpen(false);
+        if (isDirty) {
+            if (confirm('저장되지 않은 변경사항이 있습니다. 닫으면 내용이 사라집니다. Discard 하시겠습니까?')) {
+                setIsModalOpen(false);
+                setIsDirty(false);
+            }
+        } else {
+            setIsModalOpen(false);
+        }
     };
 
+    const requestCloseRef = useRef(closeModal);
+    useEffect(() => {
+        requestCloseRef.current = closeModal;
+    }, [closeModal]);
+
+    useEffect(() => {
+        if (!isModalOpen) return;
+
+        const originalStyle = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                requestCloseRef.current();
+            }
+        };
+        document.addEventListener('keydown', handleKeyDown, true);
+
+        return () => {
+            document.body.style.overflow = originalStyle;
+            document.removeEventListener('keydown', handleKeyDown, true);
+        };
+    }, [isModalOpen]);
+
     const handleSuccess = () => {
-        closeModal();
+        setIsModalOpen(false);
+        setIsDirty(false);
         router.refresh();
     };
 
@@ -167,9 +201,9 @@ export function VacationList({ initialVacations, employees, canManage, page, tot
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
                     <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true" onClick={closeModal}></div>
+                        <div className="fixed inset-0 z-40 bg-transparent backdrop-blur-sm backdrop-brightness-90 transition-all" aria-hidden="true" onClick={closeModal}></div>
                         <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-                        <div className="relative inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                        <div className="relative z-50 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
                             <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                                 <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="modal-title">
                                     Add New Vacation
@@ -178,6 +212,7 @@ export function VacationList({ initialVacations, employees, canManage, page, tot
                                     employees={employees}
                                     onSuccess={handleSuccess}
                                     onCancel={closeModal}
+                                    onDirtyChange={setIsDirty}
                                 />
                             </div>
                         </div>

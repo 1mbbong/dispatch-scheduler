@@ -38,5 +38,8 @@ export type {
     AuditLog,
     Role,
     Category,
-    ScheduleStatus
+    ScheduleStatus,
+    SystemScheduleStatus,
+    CustomerArea,
+    WorkType,
 } from '@prisma/client';

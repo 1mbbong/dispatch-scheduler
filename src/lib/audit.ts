@@ -25,6 +25,14 @@ export const AuditAction = {
     CREATE_EMPLOYEE: 'CREATE_EMPLOYEE',
     UPDATE_EMPLOYEE: 'UPDATE_EMPLOYEE',
     DEACTIVATE_EMPLOYEE: 'DEACTIVATE_EMPLOYEE',
+
+    // Label actions
+    CREATE_LABEL: 'CREATE_LABEL',
+    UPDATE_LABEL: 'UPDATE_LABEL',
+    DELETE_LABEL: 'DELETE_LABEL',
+
+    // Tenant settings actions
+    UPDATE_FILTER_DEFAULTS: 'UPDATE_FILTER_DEFAULTS',
 } as const;
 
 export type AuditActionType = typeof AuditAction[keyof typeof AuditAction];
@@ -34,6 +42,10 @@ export const EntityType = {
     ASSIGNMENT: 'ASSIGNMENT',
     VACATION: 'VACATION',
     EMPLOYEE: 'EMPLOYEE',
+    CUSTOMER_AREA: 'CUSTOMER_AREA',
+    SCHEDULE_STATUS: 'SCHEDULE_STATUS',
+    WORK_TYPE: 'WORK_TYPE',
+    TENANT: 'TENANT',
 } as const;
 
 export type EntityTypeValue = typeof EntityType[keyof typeof EntityType];

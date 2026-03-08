@@ -2,13 +2,14 @@
 
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { SerializedEmployeeWithStats } from '@/types';
+import { SerializedEmployeeWithStats, SerializedCustomerArea } from '@/types';
 import { EmployeeForm } from './employee-form';
 import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
 
 interface EmployeeListProps {
     initialEmployees: SerializedEmployeeWithStats[];
+    customerAreas: SerializedCustomerArea[];
     canManage: boolean;
     page: number;
     pageSize: number;
@@ -16,7 +17,7 @@ interface EmployeeListProps {
     totalPages: number;
 }
 
-export function EmployeeList({ initialEmployees, canManage, page, totalCount, totalPages }: EmployeeListProps) {
+export function EmployeeList({ initialEmployees, customerAreas, canManage, page, totalCount, totalPages }: EmployeeListProps) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingEmployee, setEditingEmployee] = useState<SerializedEmployeeWithStats | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -205,6 +206,7 @@ export function EmployeeList({ initialEmployees, canManage, page, totalCount, to
                                 </h3>
                                 <EmployeeForm
                                     employee={editingEmployee}
+                                    customerAreas={customerAreas}
                                     onSuccess={handleSuccess}
                                     onCancel={closeModal}
                                 />

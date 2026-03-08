@@ -1,5 +1,5 @@
 import { requireAuthServer, canManageSchedules } from '@/lib/auth';
-import { getScheduleById, getEmployees, getOverlappingEmployeeEvents } from '@/lib/queries';
+import { getScheduleById, getEmployees, getOverlappingEmployeeEvents, getScheduleAuditLogs } from '@/lib/queries';
 import { ScheduleDetail } from '@/components/schedules/schedule-detail';
 import { notFound, redirect } from 'next/navigation';
 import { parseISO } from 'date-fns';
@@ -22,13 +22,18 @@ export default async function ScheduleDetailPage({ params }: PageProps) {
     }
 
     // Direct Prisma queries — no self-fetch
-    const [schedule, employees, tenant] = await Promise.all([
+    const [schedule, employees, tenant, auditLogs, customerAreas, scheduleStatuses, workTypes, offices] = await Promise.all([
         getScheduleById(auth.tenantId, id),
         getEmployees(auth.tenantId),
         prisma.tenant.findUnique({
             where: { id: auth.tenantId },
             select: { categoryLabel: true },
         }),
+        getScheduleAuditLogs(auth.tenantId, id),
+        import('@/lib/queries').then(m => m.getCustomerAreas(auth.tenantId)),
+        import('@/lib/queries').then(m => m.getScheduleStatuses(auth.tenantId)),
+        import('@/lib/queries').then(m => m.getWorkTypes(auth.tenantId)),
+        import('@/lib/queries').then(m => m.getOffices(auth.tenantId, false)),
     ]);
 
     if (!schedule) {
@@ -36,7 +41,7 @@ export default async function ScheduleDetailPage({ params }: PageProps) {
     }
 
     // Fetch overlapping events for ALL employees to support Availability Grouping UI
-    const allEmployeeIds = employees.map(e => e.id);
+    const allEmployeeIds = employees.map((e: any) => e.id);
     const overlappingEvents = await getOverlappingEmployeeEvents(
         auth.tenantId,
         allEmployeeIds,
@@ -59,6 +64,11 @@ export default async function ScheduleDetailPage({ params }: PageProps) {
                 overlappingEvents={overlappingEvents}
                 categoryLabel={tenant?.categoryLabel || 'Category'}
                 canManage={canManageSchedules(auth.user.role)}
+                auditLogs={auditLogs}
+                customerAreas={customerAreas}
+                scheduleStatuses={scheduleStatuses}
+                workTypes={workTypes}
+                offices={offices}
             />
         </div>
     );

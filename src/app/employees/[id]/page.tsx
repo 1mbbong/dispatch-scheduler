@@ -22,6 +22,7 @@ export default async function EmployeeDetailPage({ params }: PageProps) {
 
     const employee = await prisma.employee.findFirst({
         where: { id, tenantId: auth.tenantId, isActive: true },
+        include: { customerArea: true },
     });
 
     if (!employee) {
@@ -83,6 +84,21 @@ export default async function EmployeeDetailPage({ params }: PageProps) {
                         <div className="py-3 sm:py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                             <dt className="text-sm font-medium text-gray-500">Department</dt>
                             <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{employee.department || '-'}</dd>
+                        </div>
+                        <div className="py-3 sm:py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                            <dt className="text-sm font-medium text-gray-500">Customer Area</dt>
+                            <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                                {employee.customerArea ? (
+                                    <span
+                                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
+                                        style={{ backgroundColor: employee.customerArea.color + '20', color: employee.customerArea.color, border: `1px solid ${employee.customerArea.color}40` }}
+                                    >
+                                        {employee.customerArea.name}
+                                    </span>
+                                ) : (
+                                    '-'
+                                )}
+                            </dd>
                         </div>
                         <div className="py-3 sm:py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                             <dt className="text-sm font-medium text-gray-500">Team</dt>

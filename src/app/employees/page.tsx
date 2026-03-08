@@ -1,5 +1,5 @@
 import { requireAuthServer, canManageEmployees } from '@/lib/auth';
-import { getEmployeesPaginated } from '@/lib/queries';
+import { getEmployeesPaginated, getCustomerAreas } from '@/lib/queries';
 import { EmployeeList } from '@/components/employees/employee-list';
 import { redirect } from 'next/navigation';
 
@@ -21,6 +21,7 @@ export default async function EmployeesPage({ searchParams }: PageProps) {
 
     // Direct Prisma query — no self-fetch
     const result = await getEmployeesPaginated(auth.tenantId, params);
+    const customerAreas = await getCustomerAreas(auth.tenantId, false);
 
     return (
         <div className="space-y-6">
@@ -32,6 +33,7 @@ export default async function EmployeesPage({ searchParams }: PageProps) {
 
             <EmployeeList
                 initialEmployees={result.items}
+                customerAreas={customerAreas}
                 canManage={canManageEmployees(auth.user.role)}
                 page={result.page}
                 pageSize={result.pageSize}
