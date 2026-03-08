@@ -72,6 +72,23 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
     const [endTime, setEndTime] = useState(getDefaultEnd());
     const [endManuallyEdited, setEndManuallyEdited] = useState(!!schedule);
 
+    // Selected assignees per day (date string YYYY-MM-DD -> Set of employee IDs)
+    const [selectedAssigneesByDay, setSelectedAssigneesByDay] = useState<Record<string, Set<string>>>(() => {
+        const initialMap: Record<string, Set<string>> = {};
+        if (schedule?.assignments) {
+            schedule.assignments.forEach(a => {
+                if (a.date) {
+                    const localDateStr = format(parseISO(a.date), 'yyyy-MM-dd');
+                    if (!initialMap[localDateStr]) {
+                        initialMap[localDateStr] = new Set();
+                    }
+                    initialMap[localDateStr].add(a.employeeId);
+                }
+            });
+        }
+        return initialMap;
+    });
+
     // Track initial values for dirty state
     const initialValues = useRef({
         title: schedule?.title || '',
@@ -142,6 +159,25 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
         fetcher
     );
 
+    const toggleAssignee = (dateStr: string, employeeId: string) => {
+        setSelectedAssigneesByDay(prev => {
+            const nextMap = { ...prev };
+            const currentSet = nextMap[dateStr] ? new Set(nextMap[dateStr]) : new Set<string>();
+
+            if (currentSet.has(employeeId)) {
+                currentSet.delete(employeeId);
+            } else {
+                currentSet.add(employeeId);
+            }
+
+            nextMap[dateStr] = currentSet;
+            return nextMap;
+        });
+
+        // Mark as dirty
+        if (onDirtyChange) onDirtyChange(true);
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
@@ -196,7 +232,86 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
                 return;
             }
 
-            toast.success(schedule ? 'Schedule updated' : 'Schedule created');
+            const savedSchedule = await res.json();
+            const realScheduleId = schedule?.id || savedSchedule.id;
+
+            // --- SYNC ASSIGNMENTS ---
+            // 1) Build desired state from selectedAssigneesByDay (ignoring days outside schedule range)
+            const days = eachDayOfInterval({ start: new Date(startTime), end: new Date(endTime) });
+            const desiredAssignments: Array<{ dateStr: string, employeeId: string }> = [];
+            days.forEach(day => {
+                const dateStr = format(day, 'yyyy-MM-dd');
+                const selectedSet = selectedAssigneesByDay[dateStr];
+                if (selectedSet) {
+                    selectedSet.forEach(empId => desiredAssignments.push({ dateStr, employeeId: empId }));
+                }
+            });
+
+            // 2) Build current state from schedule.assignments (only if editing)
+            const currentAssignments = schedule?.assignments || [];
+
+            // 3) Calculate diff
+            const toAdd = desiredAssignments.filter(desired =>
+                !currentAssignments.some(curr =>
+                    curr.employeeId === desired.employeeId &&
+                    curr.date && format(parseISO(curr.date), 'yyyy-MM-dd') === desired.dateStr
+                )
+            );
+
+            const toRemove = currentAssignments.filter(curr =>
+                !desiredAssignments.some(desired =>
+                    desired.employeeId === curr.employeeId &&
+                    curr.date && desired.dateStr === format(parseISO(curr.date), 'yyyy-MM-dd')
+                )
+            );
+
+            // 4) Execute Adds and Removes concurrently
+            let warningsCount = 0;
+            const promises: Promise<any>[] = [];
+
+            // Additions (with allowConflicts override)
+            for (const add of toAdd) {
+                const [y, m, d] = add.dateStr.split('-').map(Number);
+                const utcMidnight = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)).toISOString();
+
+                promises.push(
+                    fetch('/api/assignments', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            scheduleId: realScheduleId,
+                            employeeId: add.employeeId,
+                            date: utcMidnight,
+                            allowConflicts: true,
+                        }),
+                    }).then(async r => {
+                        if (r.ok) {
+                            const data = await r.json();
+                            if (data.warnings && data.warnings.length > 0) {
+                                // Accumulate count of warnings (data.warnings is an array of warning objects)
+                                warningsCount += data.warnings.length;
+                            }
+                        }
+                    })
+                );
+            }
+
+            // Removals
+            for (const rm of toRemove) {
+                promises.push(
+                    fetch(`/api/assignments/${rm.id}`, { method: 'DELETE' })
+                );
+            }
+
+            if (promises.length > 0) {
+                await Promise.allSettled(promises);
+            }
+
+            if (warningsCount > 0) {
+                toast.info(`⚠️ Saved with ${warningsCount} warnings`);
+            } else {
+                toast.success(schedule ? 'Schedule updated' : 'Schedule created');
+            }
             onSuccess();
         } catch (err: any) {
             setError(err.message || 'Network error');
@@ -205,8 +320,8 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
         }
     };
 
-    // Render Availability Preview
-    const renderAvailabilityPreview = () => {
+    // Render Per-Day Assignment Chips
+    const renderPerDayAssignments = () => {
         if (!isValidRange || !availabilityData) return null;
         if (isAvailabilityLoading) return <div className="text-sm text-gray-500 py-4">가용 인원 분석 중...</div>;
 
@@ -218,20 +333,37 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
         // Important: eachDayOfInterval fails if end < start, but we shielded it with isValidRange.
         const days = eachDayOfInterval({ start: formStart, end: formEnd });
 
+        let unstaffedDaysCount = 0;
+        const unstaffedDates: string[] = [];
+
         return (
             <div className="mt-6 border-t pt-4">
-                <h3 className="text-sm font-medium text-gray-900 mb-4">일자별 자원 가용 현황</h3>
-                <div className="space-y-4 max-h-60 overflow-y-auto pr-2">
+                <h3 className="text-sm font-medium text-gray-900 mb-4">일자별 배차 선택 (클릭하여 배정)</h3>
+                <div className="space-y-4 max-h-72 overflow-y-auto pr-2">
                     {days.map(day => {
+                        const dateStr = format(day, 'yyyy-MM-dd');
                         const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
                         const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
 
+                        const selectedIds = selectedAssigneesByDay[dateStr] || new Set<string>();
+
+                        if (selectedIds.size === 0) {
+                            unstaffedDaysCount++;
+                            unstaffedDates.push(format(day, 'MMM d'));
+                        }
+
                         // Find status for each employee on this specific day
+                        const bucketAssigned: typeof employees = [];
                         const bucketAvailable: typeof employees = [];
-                        const bucketOverbooked: typeof employees = [];
+                        const bucketOverbooked: Array<typeof employees[0] & { conflictContext?: string }> = [];
                         const bucketVacation: typeof employees = [];
 
                         employees.forEach((emp: any) => {
+                            if (selectedIds.has(emp.id)) {
+                                bucketAssigned.push(emp);
+                                return;
+                            }
+
                             // Check vacation overlap
                             const hasVacation = vacations.some((v: any) =>
                                 v.employeeId === emp.id &&
@@ -245,56 +377,99 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
                             }
 
                             // Check schedule overlap for this day
-                            const hasOverlap = schedules.some((s: any) =>
+                            const conflictSchedule = schedules.find((s: any) =>
                                 // Schedule itself must overlap the day
                                 parseISO(s.startTime) < dayEnd && parseISO(s.endTime) > dayStart &&
                                 // AND the employee must be assigned to it on THIS specific day OR the schedule is legacy (no specific date)
+                                // AND it's not the current schedule we are editing
+                                s.id !== schedule?.id &&
                                 s.assignments.some((a: any) =>
                                     a.employeeId === emp.id &&
                                     (!a.date || isSameDay(parseISO(a.date), day))
                                 )
                             );
 
-                            if (hasOverlap) {
-                                bucketOverbooked.push(emp);
+                            if (conflictSchedule) {
+                                let loc = conflictSchedule.workLocationType === 'OFFICE' ? (conflictSchedule.office?.name || 'Office')
+                                    : conflictSchedule.workLocationType === 'REMOTE' ? 'WFH' : 'Field';
+                                if (conflictSchedule.customerArea) loc += ` · ${conflictSchedule.customerArea.name}`;
+
+                                bucketOverbooked.push({
+                                    ...emp,
+                                    conflictContext: `${conflictSchedule.title} (${loc})`
+                                });
                             } else {
                                 bucketAvailable.push(emp);
                             }
                         });
 
                         return (
-                            <div key={day.toISOString()} className="bg-gray-50 rounded-md p-3 border border-gray-100">
-                                <p className="text-xs font-semibold text-gray-700 mb-2">{format(day, 'MMM d, yyyy (EEE)')}</p>
+                            <div key={dateStr} className="bg-gray-50 rounded-md p-3 border border-gray-100 relative">
+                                <div className="flex justify-between items-center mb-2">
+                                    <p className="text-xs font-semibold text-gray-700">{format(day, 'MMM d, yyyy (EEE)')}</p>
+                                    {selectedIds.size === 0 && (
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
+                                            미배정 (Unstaffed)
+                                        </span>
+                                    )}
+                                </div>
 
-                                <div className="space-y-2">
-                                    {bucketAvailable.length > 0 && (
-                                        <div>
-                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800 mb-1">
-                                                ✅ Available ({bucketAvailable.length})
-                                            </span>
-                                            <p className="text-xs text-gray-600 leading-tight">
-                                                {bucketAvailable.map((e: any) => e.name).join(', ')}
-                                            </p>
-                                        </div>
-                                    )}
-                                    {bucketOverbooked.length > 0 && (
-                                        <div>
-                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-yellow-100 text-yellow-800 border border-yellow-200 mb-1">
-                                                ⚠️ Overbooked ({bucketOverbooked.length})
-                                            </span>
-                                            <p className="text-xs text-gray-600 leading-tight">
-                                                {bucketOverbooked.map((e: any) => e.name).join(', ')}
-                                            </p>
-                                        </div>
-                                    )}
-                                    {bucketVacation.length > 0 && (
-                                        <div>
-                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-800 border border-orange-200 mb-1">
-                                                🏖️ Vacation ({bucketVacation.length})
-                                            </span>
-                                            <p className="text-xs text-gray-600 leading-tight">
-                                                {bucketVacation.map((e: any) => e.name).join(', ')}
-                                            </p>
+                                <div className="space-y-3">
+                                    {/* Assigned Category (always top) */}
+                                    {(bucketAssigned.length > 0 || bucketAvailable.length > 0 || bucketOverbooked.length > 0 || bucketVacation.length > 0) && (
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {/* 1. Assigned */}
+                                            {bucketAssigned.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    onClick={() => toggleAssignee(dateStr, emp.id)}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border-2 border-indigo-500 hover:bg-indigo-200 transition-colors"
+                                                >
+                                                    <span className="mr-1">✓</span> {emp.name}
+                                                </button>
+                                            ))}
+
+                                            {/* 2. Available */}
+                                            {bucketAvailable.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    onClick={() => toggleAssignee(dateStr, emp.id)}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-white text-gray-700 border border-gray-300 hover:bg-gray-100 hover:border-gray-400 transition-colors"
+                                                >
+                                                    {emp.name}
+                                                </button>
+                                            ))}
+
+                                            {/* 3. Overbooked */}
+                                            {bucketOverbooked.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    onClick={() => toggleAssignee(dateStr, emp.id)}
+                                                    title={emp.conflictContext}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-50 text-yellow-800 border border-yellow-300 hover:bg-yellow-100 transition-colors group relative"
+                                                >
+                                                    <span className="mr-1">⚠️</span> {emp.name}
+                                                    {/* Tooltip-like context on hover inside the button for larger screens */}
+                                                    <span className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-gray-900 text-white text-[10px] rounded shadow-sm whitespace-nowrap z-10 pointer-events-none">
+                                                        {emp.conflictContext}
+                                                    </span>
+                                                </button>
+                                            ))}
+
+                                            {/* 4. Vacation */}
+                                            {bucketVacation.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    onClick={() => toggleAssignee(dateStr, emp.id)}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-50 text-orange-800 border border-orange-300 hover:bg-orange-100 transition-colors"
+                                                >
+                                                    <span className="mr-1">🏖️</span> {emp.name}
+                                                </button>
+                                            ))}
                                         </div>
                                     )}
                                 </div>
@@ -302,6 +477,11 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
                         );
                     })}
                 </div>
+                {unstaffedDaysCount > 0 && (
+                    <p className="mt-3 text-[11px] text-red-600 font-medium">
+                        * Unassigned days: {unstaffedDates.join(', ')}
+                    </p>
+                )}
             </div>
         );
     };
@@ -518,7 +698,7 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
                 </div>
             )}
 
-            {renderAvailabilityPreview()}
+            {renderPerDayAssignments()}
 
             <div className="flex justify-end space-x-3 pt-4 border-t mt-4">
                 <button

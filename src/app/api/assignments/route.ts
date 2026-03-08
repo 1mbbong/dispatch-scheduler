@@ -102,13 +102,13 @@ export async function POST(request: NextRequest) {
             },
         });
 
-        const assignmentConflicts = overlappingAssignments.filter((a) => a.schedule.tenantId === auth.tenantId);
+        const assignmentConflicts = overlappingAssignments.filter((a: any) => a.schedule.tenantId === auth.tenantId);
 
         if (assignmentConflicts.length > 0) {
             if (!data.allowConflicts) {
                 return conflictResponse(
                     'Employee has overlapping assignments on this date',
-                    assignmentConflicts.map((c) => ({
+                    assignmentConflicts.map((c: any) => ({
                         scheduleId: c.schedule.id,
                         scheduleTitle: c.schedule.title,
                         startTime: c.startTime.toISOString(),
@@ -117,19 +117,18 @@ export async function POST(request: NextRequest) {
                     'ASSIGNMENT_CONFLICT'
                 );
             }
-            // Collect as warning
             warnings.push({
                 type: 'ASSIGNMENT_CONFLICT',
                 employeeId: data.employeeId,
                 date: requestDayStart.toISOString(),
-                conflicts: assignmentConflicts.map((c) => ({
+                conflicts: assignmentConflicts.map((c: any) => ({
                     scheduleId: c.schedule.id,
                     scheduleTitle: c.schedule.title,
                     startTime: c.startTime.toISOString(),
                     endTime: c.endTime.toISOString(),
                     workLocationType: c.schedule.workLocationType || undefined,
-                    officeName: (c.schedule as any).office?.name || undefined,
-                    customerAreaName: (c.schedule as any).customerArea?.name || undefined,
+                    officeName: c.schedule.office?.name || undefined,
+                    customerAreaName: c.schedule.customerArea?.name || undefined,
                 })),
             });
         }

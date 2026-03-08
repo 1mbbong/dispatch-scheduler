@@ -296,16 +296,17 @@ test.describe('Phase 1 Pilot Runbook Automation', () => {
         const form = page.locator('form');
 
         // Verify Available bucket natively includes RUNBOOK_AVAILABLE
-        await expect(form).toContainText('Available', { timeout: 10000 });
         await expect(form).toContainText(`RUNBOOK_AVAILABLE_${ts}`, { timeout: 10000 });
 
         // Verify Overbooked bucket exactly registers the full-day overlap logic
-        await expect(form).toContainText('Overbooked', { timeout: 10000 });
-        await expect(form).toContainText(`RUNBOOK_OVERBOOKED_${ts}`, { timeout: 10000 });
+        // Overbooked buttons now have the warning icon inline.
+        const overbookedBtn = form.locator(`button:has-text("⚠️ RUNBOOK_OVERBOOKED_${ts}")`);
+        await expect(overbookedBtn).toBeVisible({ timeout: 10000 });
 
         // Verify Vacation bucket natively captures the day1 vacation from Test 2
-        await expect(form).toContainText('Vacation', { timeout: 10000 });
-        await expect(form).toContainText(`RUNBOOK_VACATION_${ts}`, { timeout: 10000 });
+        // Vacation buttons now have the beach umbrella icon inline.
+        const vacationBtn = form.locator(`button:has-text("🏖️ RUNBOOK_VACATION_${ts}")`);
+        await expect(vacationBtn).toBeVisible({ timeout: 10000 });
     });
 
     // 5) Labels persistence — customerArea, status, workTypes round-trip
