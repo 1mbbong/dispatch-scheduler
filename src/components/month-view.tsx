@@ -14,7 +14,7 @@ import {
     isSameDay,
     parseISO
 } from 'date-fns';
-import { cn, debugDnD } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { isCancelledStatus } from '@/lib/labels';
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useToast } from '@/components/ui/toast';
@@ -67,7 +67,6 @@ export function MonthView({
 
     // Drag-and-drop reschedule state
     const [draggedSchedule, setDraggedSchedule] = useState<{ schedule: SerializedScheduleWithAssignments; originalStart: Date; originalEnd: Date } | null>(null);
-    const [hoveredDropDate, setHoveredDropDate] = useState<string | null>(null); // YYYY-MM-DD
     const [confirmReschedule, setConfirmReschedule] = useState<{ schedule: SerializedScheduleWithAssignments; newStart: Date; newEnd: Date } | null>(null);
     const [isRescheduling, setIsRescheduling] = useState(false);
 
@@ -151,46 +150,6 @@ export function MonthView({
                 }
             }
 
-            // Inject the Hover Preview block if calculating
-            if (draggedSchedule && hoveredDropDate) {
-                const { schedule, originalStart, originalEnd } = draggedSchedule;
-                const durationMs = originalEnd.getTime() - originalStart.getTime();
-
-                const hoverDay = new Date(`${hoveredDropDate}T00:00:00`);
-                // Assume drop defaults to the original local start HH:MM
-                const newStart = new Date(hoverDay);
-                newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
-                const newEnd = new Date(newStart.getTime() + durationMs);
-
-                if (newStart <= weekEndLocal && newEnd >= weekStartLocal) {
-                    let startIndex = -1;
-                    let endIndex = -1;
-
-                    for (let i = 0; i < 7; i++) {
-                        const dayStart = new Date(weekDays[i]); dayStart.setHours(0, 0, 0, 0);
-                        const dayEnd = new Date(weekDays[i]); dayEnd.setHours(23, 59, 59, 999);
-
-                        if (newStart <= dayEnd && newEnd >= dayStart) {
-                            if (startIndex === -1) startIndex = i;
-                            endIndex = i;
-                        }
-                    }
-
-                    if (startIndex !== -1) {
-                        blocks.push({
-                            schedule: { ...schedule, id: '__preview__' },
-                            isPreview: true, // Special tag for ghost styling
-                            gridColumnStart: startIndex + 1,
-                            gridColumnEnd: endIndex + 2,
-                            startsBeforeWeek: newStart < weekStartLocal,
-                            endsAfterWeek: newEnd > weekEndLocal,
-                            startTime: newStart,
-                            endTime: newEnd
-                        });
-                    }
-                }
-            }
-
             // Sort blocks: earlier start first, then longer duration
             blocks.sort((a, b) => {
                 if (a.startTime.getTime() !== b.startTime.getTime()) {
@@ -201,7 +160,7 @@ export function MonthView({
 
             return blocks;
         });
-    }, [weeks, schedules, draggedSchedule, hoveredDropDate]);
+    }, [weeks, schedules, draggedSchedule]);
 
     const schedulesByDay = useMemo(() => {
         const map = new Map<string, number>();
@@ -371,7 +330,6 @@ export function MonthView({
             }
             if (draggedSchedule) {
                 setDraggedSchedule(null);
-                setHoveredDropDate(null);
             }
         };
         window.addEventListener('mouseup', handleGlobalMouseUp);
@@ -386,7 +344,6 @@ export function MonthView({
                 setSelectionStart(null);
                 setSelectionEnd(null);
                 setIsDragging(false);
-                setHoveredDropDate(null);
                 setDraggedSchedule(null);
             }
         };
@@ -426,19 +383,9 @@ export function MonthView({
         // We do not check isDragging here because native DnD runs concurrently with pointer events.
         if (!canManage) return;
         e.preventDefault(); // allow drop
-
-        debugDnD('dragover', { dayKey: format(day, 'yyyy-MM-dd') });
-
-        if (draggedSchedule) {
-            const dateStr = format(day, 'yyyy-MM-dd');
-            if (hoveredDropDate !== dateStr) {
-                setHoveredDropDate(dateStr);
-            }
-        }
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
-        debugDnD('drop', { dayKey: format(day, 'yyyy-MM-dd'), draggedId: draggedSchedule?.schedule.id });
         if (!canManage || !draggedSchedule) return;
         e.preventDefault();
 
@@ -456,18 +403,13 @@ export function MonthView({
 
         // Only prompt if the day actually changed
         if (!isSameDay(newStart, originalStart)) {
-            debugDnD('confirm shown', { newStart, originalStart });
             setConfirmReschedule({ schedule, newStart, newEnd });
-        } else {
-            debugDnD('drop ignored (same day)');
         }
 
         setDraggedSchedule(null); // Clear drag state
-        setHoveredDropDate(null);
     };
 
     const executeReschedule = async () => {
-        debugDnD('mutation called', { endpoint: `/api/schedules/${confirmReschedule?.schedule.id}`, newStart: confirmReschedule?.newStart });
         if (!confirmReschedule) return;
         setIsRescheduling(true);
         try {
@@ -482,14 +424,11 @@ export function MonthView({
 
             if (!res.ok) {
                 const data = await res.json();
-                debugDnD('mutation response error', data);
                 // Treat 409 as generic server conflict and show returned error
                 toast.error(`Error: ${data.error || 'Conflict detected or update failed'}`);
                 setConfirmReschedule(null);
                 return;
             }
-
-            debugDnD('mutation response success');
 
             toast.success('Schedule updated.');
             setConfirmReschedule(null);
@@ -911,7 +850,6 @@ export function MonthView({
                                                                         e.preventDefault();
                                                                         return;
                                                                     }
-                                                                    debugDnD('dragstart', { scheduleId: schedule.id, canManage });
                                                                     e.stopPropagation();
                                                                     e.dataTransfer.effectAllowed = 'move';
                                                                     e.dataTransfer.setData('text/plain', schedule.id);
