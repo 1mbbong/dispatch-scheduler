@@ -568,3 +568,21 @@ export async function getAvailabilitySummary(
         availableCount,
     };
 }
+
+// ---------- Filter Defaults ----------
+
+export interface FilterDefaults {
+    areas?: 'ALL' | string[];
+    unstaffed?: boolean;
+    loc?: { office: boolean; wfh: boolean; field: boolean };
+    ghosts?: boolean;
+    dayCounts?: boolean;
+}
+
+export async function getFilterDefaults(tenantId: string): Promise<FilterDefaults | null> {
+    const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { filterDefaults: true },
+    });
+    return (tenant?.filterDefaults as FilterDefaults) ?? null;
+}

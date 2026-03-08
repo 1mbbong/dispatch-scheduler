@@ -19,6 +19,7 @@ model Tenant {
   categoryLabel String   @default("Category") @map("category_label")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
+  filterDefaults Json?   @map("filter_defaults")
 
   users            User[]
   employees        Employee[]
