@@ -17,6 +17,7 @@ import { isCancelledStatus } from '@/lib/labels';
 import { useToast } from '@/components/ui/toast';
 import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee, SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
 import { SelectionActionModal } from '@/components/selection-action-modal';
+import { getDnDEligibility } from '@/lib/dnd/eligibility';
 
 interface WeekViewProps {
     initialDate: Date;
@@ -58,6 +59,8 @@ export function WeekView({
     const [hoveredDropDate, setHoveredDropDate] = useState<string | null>(null); // YYYY-MM-DD
     const [confirmReschedule, setConfirmReschedule] = useState<{ schedule: SerializedScheduleWithAssignments; newStart: Date; newEnd: Date } | null>(null);
     const [isRescheduling, setIsRescheduling] = useState(false);
+
+    const lastToastTime = useRef<number>(0);
 
     const start = startOfWeek(initialDate, { weekStartsOn: 0 });
     const end = endOfWeek(initialDate, { weekStartsOn: 0 });
@@ -614,33 +617,57 @@ export function WeekView({
                                                 </span>
                                             )}
                                             {/* Drag Handle */}
-                                            {canManage && (
-                                                <div
-                                                    draggable={true}
-                                                    onDragStart={(e) => {
-                                                        debugDnD('dragstart', { scheduleId: schedule.id, canManage });
-                                                        e.stopPropagation();
-                                                        e.dataTransfer.effectAllowed = 'move';
-                                                        e.dataTransfer.setData('text/plain', schedule.id);
+                                            {(() => {
+                                                const eligibility = getDnDEligibility(schedule, canManage, block);
+                                                return (
+                                                    <div
+                                                        draggable={eligibility.draggable}
+                                                        onPointerDown={(e) => {
+                                                            if (!eligibility.draggable) {
+                                                                const now = Date.now();
+                                                                if (now - lastToastTime.current > 1200) {
+                                                                    toast.error(eligibility.reason || '이동할 수 없는 항목입니다.');
+                                                                    lastToastTime.current = now;
+                                                                }
+                                                                e.stopPropagation();
+                                                            } else {
+                                                                e.stopPropagation();
+                                                            }
+                                                        }}
+                                                        onDragStart={(e) => {
+                                                            if (!eligibility.draggable) {
+                                                                e.preventDefault();
+                                                                return;
+                                                            }
+                                                            debugDnD('dragstart', { scheduleId: schedule.id, canManage });
+                                                            e.stopPropagation();
+                                                            e.dataTransfer.effectAllowed = 'move';
+                                                            e.dataTransfer.setData('text/plain', schedule.id);
 
-                                                        const img = new Image();
-                                                        img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-                                                        e.dataTransfer.setDragImage(img, 0, 0);
+                                                            const img = new Image();
+                                                            img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                                                            e.dataTransfer.setDragImage(img, 0, 0);
 
-                                                        setDraggedSchedule({
-                                                            schedule,
-                                                            originalStart: parseISO(schedule.startTime),
-                                                            originalEnd: parseISO(schedule.endTime)
-                                                        });
-                                                    }}
-                                                    onDragEnd={() => setDraggedSchedule(null)}
-                                                    className="ml-auto flex items-center justify-center w-4 cursor-grab hover:bg-black/10 rounded opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity"
-                                                    title="Drag to reschedule"
-                                                    aria-label="Drag to reschedule"
-                                                >
-                                                    <span className="text-[10px] select-none leading-none tracking-tighter" style={{ marginTop: '-2px' }}>⠿</span>
-                                                </div>
-                                            )}
+                                                            setDraggedSchedule({
+                                                                schedule,
+                                                                originalStart: parseISO(schedule.startTime),
+                                                                originalEnd: parseISO(schedule.endTime)
+                                                            });
+                                                        }}
+                                                        onDragEnd={() => setDraggedSchedule(null)}
+                                                        className={cn(
+                                                            "ml-auto flex items-center justify-center w-4 rounded transition-opacity",
+                                                            eligibility.draggable
+                                                                ? "cursor-grab hover:bg-black/10 opacity-0 group-hover:opacity-60 hover:!opacity-100"
+                                                                : "cursor-not-allowed opacity-30"
+                                                        )}
+                                                        title={eligibility.draggable ? "Drag to reschedule" : eligibility.reason}
+                                                        aria-label={eligibility.draggable ? "Drag to reschedule" : "Cannot reschedule"}
+                                                    >
+                                                        <span className="text-[10px] select-none leading-none tracking-tighter" style={{ marginTop: '-2px' }}>⠿</span>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
 
                                         <div className={isCancelled ? 'text-gray-400 mt-0.5 shrink-0 truncate' : 'text-slate-700 mt-0.5 shrink-0 truncate'}>
