@@ -281,7 +281,35 @@ export function MonthView({
                 }
             }
 
-            blocks.sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+            blocks.sort((a, b) => {
+                if (a.startDate.getTime() !== b.startDate.getTime()) {
+                    return a.startDate.getTime() - b.startDate.getTime();
+                }
+                return (b.gridColumnEnd - b.gridColumnStart) - (a.gridColumnEnd - a.gridColumnStart);
+            });
+
+            // Lane assignment
+            const lanes: { colEnd: number }[] = [];
+
+            blocks.forEach(block => {
+                let assignedLane = -1;
+                for (let i = 0; i < lanes.length; i++) {
+                    // Span starts when previous span has ended.
+                    if (block.gridColumnStart > lanes[i].colEnd) {
+                        assignedLane = i;
+                        break;
+                    }
+                }
+
+                if (assignedLane === -1) {
+                    lanes.push({ colEnd: block.gridColumnEnd });
+                    block.laneIndex = lanes.length - 1;
+                } else {
+                    lanes[assignedLane].colEnd = block.gridColumnEnd;
+                    block.laneIndex = assignedLane;
+                }
+            });
+
             return blocks;
         });
     }, [weeks, vacations]);
@@ -612,7 +640,10 @@ export function MonthView({
                                                     block.startsBeforeWeek ? "rounded-l-none border-l-0 ml-0" : "rounded-l-full",
                                                     block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r-full"
                                                 )}
-                                                style={{ gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}` }}
+                                                style={{
+                                                    gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
+                                                    gridRowStart: block.laneIndex + 1,
+                                                }}
                                                 title={`🌴 ${v.employee.name} — ${v.reason || 'Vacation'} (${format(block.startDate, 'MMM d')} - ${format(block.endDate, 'MMM d')})`}
                                             >
                                                 <span className="font-semibold truncate mr-2">🌴 {v.employee.name}</span>
