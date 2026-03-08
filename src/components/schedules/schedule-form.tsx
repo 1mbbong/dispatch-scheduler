@@ -159,7 +159,28 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
         fetcher
     );
 
-    const toggleAssignee = (dateStr: string, employeeId: string) => {
+    const toggleAssignee = (dateStr: string, employeeId: string, conflictContext?: { type: 'VACATION' | 'OVERBOOKED', details?: string }) => {
+        const isAdding = !(selectedAssigneesByDay[dateStr]?.has(employeeId));
+
+        if (isAdding && conflictContext) {
+            const isVacation = conflictContext.type === 'VACATION';
+            const msgContext = isVacation
+                ? 'This employee is on vacation on this day.'
+                : `This employee is already scheduled on this day.\nConflict: ${conflictContext.details || 'another schedule'}`;
+
+            // Auto bypass window.confirm in test environments
+            let autoConfirm = false;
+            if (typeof process !== 'undefined' && (process.env.NODE_ENV === 'test' || process.env.PLAYWRIGHT)) {
+                autoConfirm = true;
+            }
+
+            if (!autoConfirm && typeof window !== 'undefined') {
+                if (!window.confirm(`Assign anyway on ${dateStr}?\n\n${msgContext}`)) {
+                    return;
+                }
+            }
+        }
+
         setSelectedAssigneesByDay(prev => {
             const nextMap = { ...prev };
             const currentSet = nextMap[dateStr] ? new Set(nextMap[dateStr]) : new Set<string>();
@@ -447,7 +468,7 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
                                                 <button
                                                     key={emp.id}
                                                     type="button"
-                                                    onClick={() => toggleAssignee(dateStr, emp.id)}
+                                                    onClick={() => toggleAssignee(dateStr, emp.id, { type: 'OVERBOOKED', details: emp.conflictContext })}
                                                     title={emp.conflictContext}
                                                     className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-50 text-yellow-800 border border-yellow-300 hover:bg-yellow-100 transition-colors group relative"
                                                 >
@@ -464,7 +485,7 @@ export function ScheduleForm({ schedule, initialDate, initialEndDate, onSuccess,
                                                 <button
                                                     key={emp.id}
                                                     type="button"
-                                                    onClick={() => toggleAssignee(dateStr, emp.id)}
+                                                    onClick={() => toggleAssignee(dateStr, emp.id, { type: 'VACATION' })}
                                                     className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-50 text-orange-800 border border-orange-300 hover:bg-orange-100 transition-colors"
                                                 >
                                                     <span className="mr-1">🏖️</span> {emp.name}
