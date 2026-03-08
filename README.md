@@ -1,4 +1,4 @@
-# Dispatch Scheduler
+# ORDI
 
 > Multi-tenant dispatch scheduler MVP — manage schedules, employees, assignments, and vacations with RBAC, conflict detection, and audit logging.
 
