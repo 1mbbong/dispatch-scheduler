@@ -12,7 +12,7 @@ import {
     isSameDay,
     parseISO
 } from 'date-fns';
-import { cn } from '@/lib/utils';
+import { cn, debugDnD } from '@/lib/utils';
 import { isCancelledStatus } from '@/lib/labels';
 import { useToast } from '@/components/ui/toast';
 import { SerializedScheduleWithAssignments, SerializedEmployeeWithStats, SerializedVacationWithEmployee, SerializedCustomerArea, SerializedScheduleStatus, SerializedWorkType } from '@/types';
@@ -150,6 +150,8 @@ export function WeekView({
         if (!canManage) return;
         e.preventDefault();
 
+        debugDnD('dragover', { dayKey: format(day, 'yyyy-MM-dd') });
+
         if (draggedSchedule) {
             const dateStr = format(day, 'yyyy-MM-dd');
             if (hoveredDropDate !== dateStr) {
@@ -159,6 +161,7 @@ export function WeekView({
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
+        debugDnD('drop', { dayKey: format(day, 'yyyy-MM-dd'), draggedId: draggedSchedule?.schedule.id });
         if (!canManage || !draggedSchedule) return;
         e.preventDefault();
 
@@ -173,13 +176,17 @@ export function WeekView({
         const dayChanged = format(newStart, 'yyyy-MM-dd') !== format(originalStart, 'yyyy-MM-dd');
 
         if (dayChanged) {
+            debugDnD('confirm shown', { newStart, originalStart });
             setConfirmReschedule({ schedule, newStart, newEnd });
+        } else {
+            debugDnD('drop ignored (same day)');
         }
         setDraggedSchedule(null);
         setHoveredDropDate(null);
     };
 
     const executeReschedule = async () => {
+        debugDnD('mutation called', { endpoint: `/api/schedules/${confirmReschedule?.schedule.id}`, newStart: confirmReschedule?.newStart });
         if (!confirmReschedule) return;
         setIsRescheduling(true);
         try {
@@ -194,10 +201,13 @@ export function WeekView({
 
             if (!res.ok) {
                 const data = await res.json();
+                debugDnD('mutation response error', data);
                 toast.error(`Error: ${data.error || 'Conflict detected or update failed'}`);
                 setConfirmReschedule(null);
                 return;
             }
+
+            debugDnD('mutation response success');
 
             toast.success('Schedule updated.');
             setConfirmReschedule(null);
@@ -533,10 +543,11 @@ export function WeekView({
                                     <div
                                         key={schedule.id}
                                         className={cn(
-                                            "group relative flex flex-col p-2 text-xs border shadow-sm hover:shadow-md transition-shadow cursor-pointer pointer-events-auto focus:outline-none focus:ring-2 focus:ring-indigo-500",
+                                            "group relative flex flex-col p-2 text-xs border shadow-sm hover:shadow-md transition-shadow cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500",
                                             block.startsBeforeWeek ? "rounded-l-sm border-l" : "rounded-l-md",
                                             block.endsAfterWeek ? "rounded-r-sm border-r" : "rounded-r-md",
-                                            block.isOriginalDragged && "opacity-0 pointer-events-none"
+                                            block.isOriginalDragged && "opacity-0 pointer-events-none",
+                                            (!block.isOriginalDragged && !!draggedSchedule) ? "pointer-events-none" : "pointer-events-auto"
                                         )}
                                         style={{
                                             gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
@@ -607,6 +618,7 @@ export function WeekView({
                                                 <div
                                                     draggable={true}
                                                     onDragStart={(e) => {
+                                                        debugDnD('dragstart', { scheduleId: schedule.id, canManage });
                                                         e.stopPropagation();
                                                         e.dataTransfer.effectAllowed = 'move';
                                                         e.dataTransfer.setData('text/plain', schedule.id);

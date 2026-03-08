@@ -14,7 +14,7 @@ import {
     isSameDay,
     parseISO
 } from 'date-fns';
-import { cn } from '@/lib/utils';
+import { cn, debugDnD } from '@/lib/utils';
 import { isCancelledStatus } from '@/lib/labels';
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useToast } from '@/components/ui/toast';
@@ -424,6 +424,8 @@ export function MonthView({
         if (!canManage) return;
         e.preventDefault(); // allow drop
 
+        debugDnD('dragover', { dayKey: format(day, 'yyyy-MM-dd') });
+
         if (draggedSchedule) {
             const dateStr = format(day, 'yyyy-MM-dd');
             if (hoveredDropDate !== dateStr) {
@@ -433,6 +435,7 @@ export function MonthView({
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, day: Date) => {
+        debugDnD('drop', { dayKey: format(day, 'yyyy-MM-dd'), draggedId: draggedSchedule?.schedule.id });
         if (!canManage || !draggedSchedule) return;
         e.preventDefault();
 
@@ -450,7 +453,10 @@ export function MonthView({
 
         // Only prompt if the day actually changed
         if (!isSameDay(newStart, originalStart)) {
+            debugDnD('confirm shown', { newStart, originalStart });
             setConfirmReschedule({ schedule, newStart, newEnd });
+        } else {
+            debugDnD('drop ignored (same day)');
         }
 
         setDraggedSchedule(null); // Clear drag state
@@ -458,6 +464,7 @@ export function MonthView({
     };
 
     const executeReschedule = async () => {
+        debugDnD('mutation called', { endpoint: `/api/schedules/${confirmReschedule?.schedule.id}`, newStart: confirmReschedule?.newStart });
         if (!confirmReschedule) return;
         setIsRescheduling(true);
         try {
@@ -472,11 +479,14 @@ export function MonthView({
 
             if (!res.ok) {
                 const data = await res.json();
+                debugDnD('mutation response error', data);
                 // Treat 409 as generic server conflict and show returned error
                 toast.error(`Error: ${data.error || 'Conflict detected or update failed'}`);
                 setConfirmReschedule(null);
                 return;
             }
+
+            debugDnD('mutation response success');
 
             toast.success('Schedule updated.');
             setConfirmReschedule(null);
@@ -782,13 +792,14 @@ export function MonthView({
 
                                         return (
                                             <div
-                                                key={`${schedule.id}-${weekIndex}-${idx}`}
+                                                key={`live-${schedule.id}-${weekIndex}`}
                                                 className={cn(
-                                                    "mx-0.5 px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-xs truncate rounded cursor-pointer pointer-events-auto transition-opacity z-10 focus:outline-none focus:ring-2 focus:ring-indigo-500 select-none",
+                                                    "mx-0.5 px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-xs truncate rounded cursor-pointer transition-opacity z-10 focus:outline-none focus:ring-2 focus:ring-indigo-500 select-none",
                                                     isCancelled ? 'opacity-70 border-dashed border bg-gray-50/50' : 'hover:opacity-90',
                                                     block.startsBeforeWeek ? "rounded-l-none border-l-0 ml-0" : "rounded-l border-l-2",
                                                     block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r",
-                                                    block.isOriginalDragged && "opacity-0 pointer-events-none"
+                                                    block.isOriginalDragged && "opacity-0 pointer-events-none",
+                                                    (!block.isOriginalDragged && !!draggedSchedule) ? "pointer-events-none" : "pointer-events-auto"
                                                 )}
                                                 style={isCancelled ? {
                                                     gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
@@ -879,6 +890,7 @@ export function MonthView({
                                                         <div
                                                             draggable={true}
                                                             onDragStart={(e) => {
+                                                                debugDnD('dragstart', { scheduleId: schedule.id, canManage });
                                                                 e.stopPropagation();
                                                                 e.dataTransfer.effectAllowed = 'move';
                                                                 e.dataTransfer.setData('text/plain', schedule.id);
