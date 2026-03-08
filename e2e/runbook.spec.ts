@@ -418,4 +418,45 @@ test.describe('Phase 1 Pilot Runbook Automation', () => {
         expect(foundActive).toBeFalsy();
     });
 
+    // 9) O3 Work Location: OFFICE→REMOTE clears officeId
+    test('O3 Work Location: OFFICE persists officeId, REMOTE clears it', async () => {
+        // Pick an active office from seed
+        const officesRes = await apiContext.get('/api/offices');
+        const officesList = await officesRes.json();
+        expect(officesList.length).toBeGreaterThanOrEqual(1);
+        const pickedOffice = officesList[0];
+
+        const title = `RUNBOOK_O3_OFFICE_${ts}`;
+
+        // Create schedule as OFFICE with officeId
+        const createRes = await apiContext.post('/api/schedules', {
+            data: {
+                title,
+                startTime: `${day2}T14:00:00.000Z`,
+                endTime: `${day2}T18:00:00.000Z`,
+                workLocationType: 'OFFICE',
+                officeId: pickedOffice.id,
+            }
+        });
+        expect(createRes.ok()).toBeTruthy();
+
+        // Verify OFFICE + officeId persisted
+        const created = await findScheduleByTitle(apiContext, title, `${day2}T00:00:00.000Z`, `${day2}T23:59:59.000Z`);
+        expect(created.workLocationType).toBe('OFFICE');
+        expect(created.officeId ?? created.office?.id).toBe(pickedOffice.id);
+
+        // PATCH to REMOTE (should clear officeId)
+        const patchRes = await apiContext.patch(`/api/schedules/${created.id}`, {
+            data: { workLocationType: 'REMOTE' }
+        });
+        expect(patchRes.ok()).toBeTruthy();
+
+        // Verify REMOTE + officeId null
+        const updated = await findScheduleByTitle(apiContext, title, `${day2}T00:00:00.000Z`, `${day2}T23:59:59.000Z`);
+        expect(updated.workLocationType).toBe('REMOTE');
+        // officeId must be null (cleared by server)
+        const updatedOfficeId = updated.officeId ?? updated.office?.id ?? null;
+        expect(updatedOfficeId).toBeNull();
+    });
+
 });
