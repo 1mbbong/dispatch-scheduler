@@ -244,10 +244,7 @@ export function WeekView({
         schedules.forEach(s => uniqueSchedules.set(s.id, s));
 
         for (const schedule of Array.from(uniqueSchedules.values())) {
-            // If dragging, ignore the original schedule
-            if (draggedSchedule && schedule.id === draggedSchedule.schedule.id) {
-                continue;
-            }
+            const isOriginalDragged = draggedSchedule ? schedule.id === draggedSchedule.schedule.id : false;
 
             const sStart = parseISO(schedule.startTime);
             const sEnd = parseISO(schedule.endTime);
@@ -277,6 +274,7 @@ export function WeekView({
                     endsAfterWeek: sEnd > end,
                     startTime: sStart,
                     endTime: sEnd,
+                    isOriginalDragged
                 });
             }
         }
@@ -537,7 +535,8 @@ export function WeekView({
                                         className={cn(
                                             "group relative flex flex-col p-2 text-xs border shadow-sm hover:shadow-md transition-shadow cursor-pointer pointer-events-auto focus:outline-none focus:ring-2 focus:ring-indigo-500",
                                             block.startsBeforeWeek ? "rounded-l-sm border-l" : "rounded-l-md",
-                                            block.endsAfterWeek ? "rounded-r-sm border-r" : "rounded-r-md"
+                                            block.endsAfterWeek ? "rounded-r-sm border-r" : "rounded-r-md",
+                                            block.isOriginalDragged && "opacity-0 pointer-events-none"
                                         )}
                                         style={{
                                             gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
@@ -550,7 +549,8 @@ export function WeekView({
                                                 backgroundColor: '#f9fafb',
                                                 borderColor: '#d1d5db',
                                                 borderLeftColor: '#9ca3af'
-                                            } : {})
+                                            } : {}),
+                                            ...(block.isOriginalDragged ? { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } : {})
                                         }}
                                         role="button"
                                         tabIndex={0}

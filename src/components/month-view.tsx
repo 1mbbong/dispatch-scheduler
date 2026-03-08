@@ -113,11 +113,7 @@ export function MonthView({
             schedules.forEach(s => uniqueSchedules.set(s.id, s));
 
             for (const schedule of Array.from(uniqueSchedules.values())) {
-                // If this is the currently dragged schedule, ignore it in the collision/rendering loop
-                // to prevent it from occupying its old spot while dragging
-                if (draggedSchedule && schedule.id === draggedSchedule.schedule.id) {
-                    continue;
-                }
+                const isOriginalDragged = draggedSchedule ? schedule.id === draggedSchedule.schedule.id : false;
 
                 const sStart = parseISO(schedule.startTime);
                 const sEnd = parseISO(schedule.endTime);
@@ -145,7 +141,8 @@ export function MonthView({
                             startsBeforeWeek: sStart < weekStartLocal,
                             endsAfterWeek: sEnd > weekEndLocal,
                             startTime: sStart,
-                            endTime: sEnd
+                            endTime: sEnd,
+                            isOriginalDragged
                         });
                     }
                 }
@@ -570,6 +567,11 @@ export function MonthView({
                     const overflowCounts = new Array(7).fill(0);
 
                     combinedBlocks.forEach(block => {
+                        if (block.isOriginalDragged) {
+                            block.laneIndex = 0;
+                            return; // skip lane occupancy so it doesn't push down the preview
+                        }
+
                         let placed = false;
                         for (let l = 0; l < maxLanes; l++) {
                             if (!lanes[l]) lanes[l] = [];
@@ -593,6 +595,13 @@ export function MonthView({
 
                     // Flatten back the successfully placed visible blocks
                     const visibleBlocks = lanes.flat();
+
+                    // Add back the original dragged elements so they stay mounted for HTML5 DnD to survive
+                    combinedBlocks.forEach(block => {
+                        if (block.isOriginalDragged) {
+                            visibleBlocks.push(block);
+                        }
+                    });
 
                     const rowMinHeight = LANE_CAP_ENABLED ? undefined : Math.max(100, lanes.length * 24 + 40);
 
@@ -778,7 +787,8 @@ export function MonthView({
                                                     "mx-0.5 px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-xs truncate rounded cursor-pointer pointer-events-auto transition-opacity z-10 focus:outline-none focus:ring-2 focus:ring-indigo-500 select-none",
                                                     isCancelled ? 'opacity-70 border-dashed border bg-gray-50/50' : 'hover:opacity-90',
                                                     block.startsBeforeWeek ? "rounded-l-none border-l-0 ml-0" : "rounded-l border-l-2",
-                                                    block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r"
+                                                    block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r",
+                                                    block.isOriginalDragged && "opacity-0 pointer-events-none"
                                                 )}
                                                 style={isCancelled ? {
                                                     gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
