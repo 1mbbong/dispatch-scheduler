@@ -52,7 +52,9 @@ export default async function MonthCalendarPage({ searchParams }: PageProps) {
 
 
 
-    const scheduleIds = schedules.map((s: any) => s.id);
+    const scheduleIds = schedules
+        .filter((s: any) => s.workLocationType === 'FIELD')
+        .map((s: any) => s.id);
     const rescheduleSnapshots = await getLatestRescheduleSnapshots(auth!.tenantId, scheduleIds);
 
     const selectedAreas = areas ? areas.split(',') : null;

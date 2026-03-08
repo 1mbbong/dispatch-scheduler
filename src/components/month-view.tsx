@@ -626,9 +626,6 @@ export function MonthView({
                                                         <span className="shrink-0 text-[10px] uppercase font-bold tracking-wider text-slate-500 px-1 border border-slate-300 rounded-sm bg-slate-100">RESCHEDULED</span>
                                                         <span>{schedule.title}</span>
                                                     </div>
-                                                    <div className="text-slate-600 truncate mt-0.5">
-                                                        {format(block.startTime, 'MMM d, HH:mm')} - {format(block.endTime, 'HH:mm')}
-                                                    </div>
                                                 </div>
                                             );
                                         }
