@@ -31,10 +31,7 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
     const endTime = parseISO(schedule.endTime);
     const scheduleDays = eachDayOfInterval({ start: startTime, end: endTime });
 
-    const [isAssigning, setIsAssigning] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-    const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
-    const [selectedDate, setSelectedDate] = useState<string>(scheduleDays[0].toISOString());
     const [error, setError] = useState<any>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isTogglingStatus, setIsTogglingStatus] = useState(false);
@@ -78,88 +75,181 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
         };
     }, [isEditModalOpen]);
 
-    // Filter out already assigned employees FOR THE SELECTED DATE
-    const assignedEmployeeIdsForSelectedDate = new Set(
-        schedule.assignments
-            .filter((a: any) => isSameDay(parseISO(a.date), parseISO(selectedDate)))
-            .map((a: any) => a.employeeId)
-    );
-    const unassignedEmployees = employees.filter(e => !assignedEmployeeIdsForSelectedDate.has(e.id));
 
-    // Helper to check if an employee has a conflict on a specific day
-    const getEmployeeHintsForDay = (employeeId: string, day: Date) => {
-        let hasVacation = false;
-        let hasOverlap = false;
 
-        if (overlappingEvents) {
-            // Check vacations
-            hasVacation = overlappingEvents.vacations.some(v =>
-                v.employeeId === employeeId &&
-                parseISO(v.startDate) <= day &&
-                parseISO(v.endDate) >= day
-            );
+    const renderPerDayAssignments = () => {
+        let unstaffedDaysCount = 0;
+        const unstaffedDates: string[] = [];
+        const vacations = overlappingEvents?.vacations || [];
+        const schedules = overlappingEvents?.schedules || [];
 
-            // Check other schedules
-            const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
-            const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
-            hasOverlap = overlappingEvents.schedules.some(s =>
-                s.assignments.some((a: any) => a.employeeId === employeeId) &&
-                parseISO(s.startTime) < dayEnd &&
-                parseISO(s.endTime) > dayStart
-            );
-        }
+        return (
+            <div className="space-y-4">
+                <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                    {scheduleDays.map(day => {
+                        const dateStr = format(day, 'yyyy-MM-dd');
+                        const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
+                        const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
 
-        return { hasVacation, hasOverlap };
-    };
+                        // Find who is assigned TODAY
+                        const assignedIds = new Set(
+                            schedule.assignments
+                                .filter((a: any) => isSameDay(parseISO(a.date), day))
+                                .map((a: any) => a.employeeId)
+                        );
 
-    // Group unassigned employees by availability for the currently selected date
-    const selectedDateObj = parseISO(selectedDate);
-    const bucketAvailable: SerializedEmployeeWithStats[] = [];
-    const bucketOverbooked: SerializedEmployeeWithStats[] = [];
-    const bucketVacation: SerializedEmployeeWithStats[] = [];
+                        // Map of employeeId -> assignmentId for this precise date
+                        const assignmentIdMap = new Map<string, string>();
+                        schedule.assignments.forEach((a: any) => {
+                            if (isSameDay(parseISO(a.date), day)) {
+                                assignmentIdMap.set(a.employeeId, a.id);
+                            }
+                        });
 
-    unassignedEmployees.forEach(emp => {
-        const { hasVacation, hasOverlap } = getEmployeeHintsForDay(emp.id, selectedDateObj);
-        if (hasVacation) {
-            bucketVacation.push(emp);
-        } else if (hasOverlap) {
-            bucketOverbooked.push(emp);
-        } else {
-            bucketAvailable.push(emp);
-        }
-    });
 
-    // Parse 409 conflict response into a single user-friendly toast message.
-    // Strategy: show up to 2 conflict items + "and X more" to avoid toast spam.
-    const formatConflictToast = (data: any): string => {
-        try {
-            const isVacation = data.code === 'VACATION_CONFLICT';
-            const headline = isVacation
-                ? '🏖️ Vacation conflict'
-                : '⚠️ Schedule conflict';
+                        if (assignedIds.size === 0) {
+                            unstaffedDaysCount++;
+                            unstaffedDates.push(format(day, 'MMM d'));
+                        }
 
-            const conflicts: any[] = data.conflicts ?? [];
-            if (conflicts.length === 0) {
-                return `${headline}: ${data.error || 'Overlap detected'}`;
-            }
+                        // Find status for each employee on this specific day
+                        const bucketAssigned: typeof employees = [];
+                        const bucketAvailable: typeof employees = [];
+                        const bucketOverbooked: Array<typeof employees[0] & { conflictContext?: string }> = [];
+                        const bucketVacation: typeof employees = [];
 
-            const lines = conflicts.slice(0, 2).map((c: any) => {
-                const start = c.startTime ? format(parseISO(c.startTime), 'MMM d HH:mm') : '?';
-                const end = c.endTime ? format(parseISO(c.endTime), 'HH:mm') : '?';
-                const title = isVacation ? 'Vacation' : (c.scheduleTitle || 'Unknown');
-                return `• ${title} (${start}–${end})`;
-            });
+                        employees.forEach((emp: any) => {
+                            if (assignedIds.has(emp.id)) {
+                                bucketAssigned.push(emp);
+                                return;
+                            }
 
-            const remaining = conflicts.length - 2;
-            if (remaining > 0) {
-                lines.push(`  ...and ${remaining} more`);
-            }
+                            // Check vacation overlap
+                            const hasVacation = vacations.some((v: any) =>
+                                v.employeeId === emp.id &&
+                                parseISO(v.startDate) <= dayEnd &&
+                                parseISO(v.endDate) >= dayStart
+                            );
 
-            return `${headline}\n${lines.join('\n')}`;
-        } catch {
-            // Fallback for unexpected payload shapes
-            return 'Conflict detected. Please review schedule/vacation overlaps.';
-        }
+                            if (hasVacation) {
+                                bucketVacation.push(emp);
+                                return;
+                            }
+
+                            // Check schedule overlap for this day
+                            const conflictSchedule = schedules.find((s: any) =>
+                                // Schedule itself must overlap the day
+                                parseISO(s.startTime) < dayEnd && parseISO(s.endTime) > dayStart &&
+                                // AND the employee must be assigned to it on THIS specific day OR the schedule is legacy (no specific date)
+                                // AND it's not the current schedule we are editing
+                                s.id !== schedule.id &&
+                                s.assignments.some((a: any) =>
+                                    a.employeeId === emp.id &&
+                                    (!a.date || isSameDay(parseISO(a.date), day))
+                                )
+                            );
+
+                            if (conflictSchedule) {
+                                let loc = conflictSchedule.workLocationType === 'OFFICE' ? (conflictSchedule.office?.name || 'Office')
+                                    : conflictSchedule.workLocationType === 'REMOTE' ? 'WFH' : 'Field';
+                                if (conflictSchedule.customerArea) loc += ` · ${conflictSchedule.customerArea.name}`;
+
+                                bucketOverbooked.push({
+                                    ...emp,
+                                    conflictContext: `${conflictSchedule.title} (${loc})`
+                                });
+                            } else {
+                                bucketAvailable.push(emp);
+                            }
+                        });
+
+                        return (
+                            <div key={dateStr} className="bg-gray-50 rounded-md p-3 border border-gray-100 relative">
+                                <div className="flex justify-between items-center mb-2">
+                                    <p className="text-xs font-semibold text-gray-700">{format(day, 'MMM d, yyyy (EEE)')}</p>
+                                    {assignedIds.size === 0 && (
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
+                                            미배정 (Unstaffed)
+                                        </span>
+                                    )}
+                                </div>
+
+                                <div className="space-y-3">
+                                    {/* Assigned Category (always top) */}
+                                    {(bucketAssigned.length > 0 || bucketAvailable.length > 0 || bucketOverbooked.length > 0 || bucketVacation.length > 0) && (
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {/* 1. Assigned */}
+                                            {bucketAssigned.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    disabled={isLoading || !canManage}
+                                                    onClick={() => handleToggleAssignee(emp.id, day, assignmentIdMap.get(emp.id))}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border-2 border-indigo-500 hover:bg-indigo-200 transition-colors disabled:opacity-50"
+                                                >
+                                                    <span className="mr-1">✓</span> {emp.name}
+                                                </button>
+                                            ))}
+
+                                            {/* 2. Available */}
+                                            {bucketAvailable.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    disabled={isLoading || !canManage}
+                                                    onClick={() => handleToggleAssignee(emp.id, day)}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-white text-gray-700 border border-gray-300 hover:bg-gray-100 hover:border-gray-400 transition-colors disabled:opacity-50"
+                                                >
+                                                    {emp.name}
+                                                </button>
+                                            ))}
+
+                                            {/* 3. Overbooked */}
+                                            {bucketOverbooked.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    disabled={isLoading || !canManage}
+                                                    onClick={() => handleToggleAssignee(emp.id, day)}
+                                                    title={emp.conflictContext}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-50 text-yellow-800 border border-yellow-300 hover:bg-yellow-100 transition-colors group relative disabled:opacity-50"
+                                                >
+                                                    <span className="mr-1">⚠️</span> {emp.name}
+                                                    {/* Tooltip-like context on hover inside the button for larger screens */}
+                                                    <span className="hidden group-hover:block absolute top-[110%] left-1/2 -translate-x-1/2 mb-1 px-2 py-1 bg-gray-900 text-white text-[10px] rounded shadow-sm whitespace-nowrap z-10 pointer-events-none">
+                                                        {emp.conflictContext}
+                                                    </span>
+                                                </button>
+                                            ))}
+
+                                            {/* 4. Vacation */}
+                                            {bucketVacation.map((emp: any) => (
+                                                <button
+                                                    key={emp.id}
+                                                    type="button"
+                                                    disabled={isLoading || !canManage}
+                                                    onClick={() => handleToggleAssignee(emp.id, day)}
+                                                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-50 text-orange-800 border border-orange-300 hover:bg-orange-100 transition-colors disabled:opacity-50"
+                                                >
+                                                    <span className="mr-1">🏖️</span> {emp.name}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+                {unstaffedDaysCount > 0 && (
+                    <div className="mt-3 bg-red-50 border border-red-100 rounded-md p-3">
+                        <p className="text-[12px] text-red-800 font-medium flex items-center gap-1.5">
+                            <span className="text-xl">⚠️</span> {unstaffedDaysCount} unassigned day(s). Action required to satisfy coverage: {unstaffedDates.join(', ')}
+                        </p>
+                    </div>
+                )}
+            </div>
+        );
     };
 
     const handleEditSuccess = () => {
@@ -168,63 +258,54 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
         router.refresh();
     };
 
-    const handleAssign = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!selectedEmployeeId) return;
-
+    const handleToggleAssignee = async (employeeId: string, day: Date, currentAssignmentId?: string) => {
+        if (!canManage) return;
         setIsLoading(true);
-        setError(null);
 
         try {
-            const res = await fetch('/api/assignments', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    scheduleId: schedule.id,
-                    employeeId: selectedEmployeeId,
-                    date: selectedDate,
-                }),
-            });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                // Handle Conflict Error specifically
-                if (res.status === 409) {
-                    setError(data); // Store for inline display
-                    toast.error(formatConflictToast(data));
+            if (currentAssignmentId) {
+                // DELETE Exact assignment ID
+                const res = await fetch(`/api/assignments/${currentAssignmentId}`, { method: 'DELETE' });
+                if (res.ok) {
+                    toast.success('Employee unassigned');
                 } else {
-                    throw new Error(data.error || 'Failed to assign employee');
+                    throw new Error('Failed to unassign');
                 }
             } else {
-                setIsAssigning(false);
-                setSelectedEmployeeId('');
-                toast.success('Employee assigned successfully');
-                router.refresh();
+                // ADD
+                const y = day.getFullYear();
+                const m = day.getMonth(); // 0-indexed
+                const d = day.getDate();
+                const utcMidnight = new Date(Date.UTC(y, m, d, 0, 0, 0, 0)).toISOString();
+
+                const res = await fetch('/api/assignments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scheduleId: schedule.id,
+                        employeeId,
+                        date: utcMidnight,
+                        allowConflicts: true,
+                    }),
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.warnings && data.warnings.length > 0) {
+                        toast.info(`⚠️ Saved with ${data.warnings.length} warnings`);
+                    } else {
+                        toast.success('Employee assigned');
+                    }
+                } else {
+                    const data = await res.json();
+                    throw new Error(data.error || 'Failed to assign');
+                }
             }
+            router.refresh();
         } catch (err: any) {
-            setError({ error: err.message });
+            toast.error(err.message || 'Error updating assignment');
         } finally {
             setIsLoading(false);
-        }
-    };
-
-    const handleUnassign = async (assignmentId: string) => {
-        if (!confirm('Unassign this employee?')) return;
-
-        try {
-            const res = await fetch(`/api/assignments/${assignmentId}`, {
-                method: 'DELETE',
-            });
-            if (res.ok) {
-                toast.success('Employee unassigned');
-                router.refresh();
-            } else {
-                toast.error('Failed to unassign employee');
-            }
-        } catch (e) {
-            console.error(e);
-            toast.error('Error unassigning employee');
         }
     };
 
@@ -358,96 +439,18 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
 
                 {activeTab === 'DETAILS' && (
                     <div className="bg-white shadow rounded-lg overflow-hidden border">
-                        <div className="px-4 py-5 sm:px-6 flex justify-between items-center bg-gray-50">
-                            <h3 className="text-lg leading-6 font-medium text-gray-900">
+                        <div className="px-4 py-5 sm:px-6 flex flex-col sm:flex-row justify-between sm:items-center bg-gray-50 border-b">
+                            <h3 className="text-lg leading-6 font-medium text-gray-900 mb-2 sm:mb-0">
                                 Assigned Employees
                             </h3>
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                {schedule.assignments.length} / {employees.length}
+                                {schedule.assignments.length} / {employees.length} Assignments
                             </span>
                         </div>
 
-                        {schedule.assignments.length === 0 ? (
-                            <div className="px-4 py-8 text-sm text-gray-500 text-center border-t">No employees assigned yet.</div>
-                        ) : (
-                            <div className="divide-y divide-gray-200">
-                                {scheduleDays.map((day, idx) => (
-                                    <div key={day.toISOString()}>
-                                        {scheduleDays.length > 1 && (
-                                            <div className="bg-gray-100 px-4 py-2 border-t border-b text-sm font-semibold text-gray-700">
-                                                {format(day, 'MMM d (EEE)')}
-                                            </div>
-                                        )}
-                                        <ul className="divide-y divide-gray-100">
-                                            {schedule.assignments
-                                                .filter((a: any) => isSameDay(parseISO(a.date), day))
-                                                .map((assignment) => {
-                                                    const { hasVacation, hasOverlap } = getEmployeeHintsForDay(assignment.employeeId, day);
-
-                                                    // Ensure assignment.employee exists
-                                                    const emp = assignment.employee;
-
-                                                    return (
-                                                        <li key={`${day.toISOString()}-${assignment.id}`} className="px-4 py-4 flex items-center justify-between hover:bg-gray-50">
-                                                            <div className="flex items-center">
-                                                                <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold mr-3">
-                                                                    {emp?.name ? emp.name.charAt(0) : '?'}
-                                                                </div>
-                                                                <div>
-                                                                    <div className="flex items-center gap-2 flex-wrap text-xs md:text-sm">
-                                                                        <p className="font-medium text-gray-900">
-                                                                            {emp ? emp.name : 'Unknown Employee'}
-                                                                        </p>
-                                                                        {!emp ? (
-                                                                            <span title="Employee record not found" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-red-100 text-red-800 cursor-help">
-                                                                                (Unknown)
-                                                                            </span>
-                                                                        ) : !emp.isActive ? (
-                                                                            <span title="Inactive — cannot be assigned" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-gray-100 text-gray-800 cursor-help">
-                                                                                (Inactive)
-                                                                            </span>
-                                                                        ) : null}
-
-                                                                        {/* Hints */}
-                                                                        {hasVacation && (
-                                                                            <span title="On vacation this day" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-orange-100 text-orange-800 border border-orange-200 cursor-help">
-                                                                                🏖️ Vacation
-                                                                            </span>
-                                                                        )}
-                                                                        {hasOverlap && (
-                                                                            <span title="Assigned to another schedule this day" className="inline-flex items-center px-2 py-0.5 rounded font-medium bg-yellow-100 text-yellow-800 border border-yellow-200 cursor-help">
-                                                                                ⚠️ Overbooked
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                    <p className="text-xs text-gray-500 mt-0.5">
-                                                                        {!emp
-                                                                            ? 'Employee record not found'
-                                                                            : !emp.isActive
-                                                                                ? `${emp.email || 'No email'} (Inactive)`
-                                                                                : (emp.email || 'No email')
-                                                                        }
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-
-                                                            {/* Allow unassigning any individual day assignment */}
-                                                            {canManage && (
-                                                                <button
-                                                                    onClick={() => handleUnassign(assignment.id)}
-                                                                    className="text-sm text-red-600 hover:text-red-900 whitespace-nowrap ml-4 border border-transparent hover:border-red-200 px-2 py-1 rounded transition-colors"
-                                                                >
-                                                                    Unassign
-                                                                </button>
-                                                            )}
-                                                        </li>
-                                                    );
-                                                })}
-                                        </ul>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                        <div className="p-4 sm:px-6">
+                            {renderPerDayAssignments()}
+                        </div>
                     </div>
                 )}
 
@@ -543,128 +546,32 @@ export function ScheduleDetail({ schedule, employees, overlappingEvents, categor
                 )}
             </div>
 
-            {/* Sidebar: Add Assignment */}
-            <div className="space-y-6">
-                <div className="bg-white shadow rounded-lg p-6 border">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Assign Employee</h3>
-
-                    <form onSubmit={handleAssign} className="space-y-4">
-                        {scheduleDays.length > 1 && (
-                            <div>
-                                <label htmlFor="assignment-date" className="block text-sm font-medium text-gray-700">Select Date</label>
-                                <select
-                                    id="assignment-date"
-                                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
-                                    value={selectedDate}
-                                    onChange={(e) => setSelectedDate(e.target.value)}
-                                    disabled={isLoading}
-                                >
-                                    {scheduleDays.map(day => (
-                                        <option key={day.toISOString()} value={day.toISOString()}>
-                                            {format(day, 'MMM d, yyyy (EEEE)')}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-                        <div>
-                            <label htmlFor="employee" className="block text-sm font-medium text-gray-700">Select Employee</label>
-                            <select
-                                id="employee"
-                                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
-                                value={selectedEmployeeId}
-                                onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                                disabled={isLoading}
-                            >
-                                <option value="">Choose...</option>
-                                {bucketAvailable.length > 0 && (
-                                    <optgroup label={`✅ Available (${bucketAvailable.length})`}>
-                                        {bucketAvailable.map((emp) => (
-                                            <option key={emp.id} value={emp.id}>{emp.name}</option>
-                                        ))}
-                                    </optgroup>
-                                )}
-                                {bucketOverbooked.length > 0 && (
-                                    <optgroup label={`⚠️ Overbooked (${bucketOverbooked.length})`}>
-                                        {bucketOverbooked.map((emp) => (
-                                            <option key={emp.id} value={emp.id}>{emp.name} (Has conflict)</option>
-                                        ))}
-                                    </optgroup>
-                                )}
-                                {bucketVacation.length > 0 && (
-                                    <optgroup label={`🏖️ Vacation (${bucketVacation.length})`}>
-                                        {bucketVacation.map((emp) => (
-                                            <option key={emp.id} value={emp.id}>{emp.name} (On vacation)</option>
-                                        ))}
-                                    </optgroup>
-                                )}
-                            </select>
-                        </div>
-
-                        {error && (
-                            <div className="rounded-md bg-red-50 p-4 text-sm text-red-700">
-                                <p className="font-medium">
-                                    {error.code === 'VACATION_CONFLICT'
-                                        ? '🏖️ Vacation Conflict'
-                                        : error.code === 'ASSIGNMENT_CONFLICT'
-                                            ? '⚠️ Schedule Overlap'
-                                            : 'Assignment Failed'}
-                                </p>
-                                <p className="mt-1">{error.error}</p>
-                                {error.conflicts && error.conflicts.length > 0 && (
-                                    <ul className="mt-2 list-disc list-inside text-xs">
-                                        {error.conflicts.map((c: any, i: number) => (
-                                            <li key={i}>
-                                                {error.code === 'VACATION_CONFLICT'
-                                                    ? <>Vacation: </>
-                                                    : <>Overlap: <b>{c.scheduleTitle || 'Unknown'}</b> — </>}
-                                                {format(parseISO(c.startTime), 'MMM d, HH:mm')} – {format(parseISO(c.endTime), 'HH:mm')}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </div>
-                        )}
-
-                        <button
-                            type="submit"
-                            disabled={!selectedEmployeeId || isLoading}
-                            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-                        >
-                            {isLoading ? 'Checking...' : 'Assign'}
-                        </button>
-                    </form>
-                </div>
-            </div>
-
             {/* Edit Schedule Modal */}
-            {
-                isEditModalOpen && (
-                    <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="edit-modal-title" role="dialog" aria-modal="true">
-                        <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                            <div className="fixed inset-0 z-40 bg-transparent backdrop-blur-sm backdrop-brightness-90 transition-all" aria-hidden="true" onClick={requestClose}></div>
-                            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-                            <div className="relative z-50 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                                <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                    <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="edit-modal-title">
-                                        Edit Schedule
-                                    </h3>
-                                    <ScheduleForm
-                                        schedule={schedule}
-                                        onSuccess={handleEditSuccess}
-                                        onCancel={requestClose}
-                                        onDirtyChange={setIsDirty}
-                                        customerAreas={customerAreas}
-                                        scheduleStatuses={scheduleStatuses}
-                                        workTypes={workTypes}
-                                        offices={offices}
-                                    />
-                                </div>
+            {isEditModalOpen && (
+                <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="edit-modal-title" role="dialog" aria-modal="true">
+                    <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div className="fixed inset-0 z-40 bg-transparent backdrop-blur-sm backdrop-brightness-90 transition-all" aria-hidden="true" onClick={requestClose}></div>
+                        <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        <div className="relative z-50 inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4" id="edit-modal-title">
+                                    Edit Schedule
+                                </h3>
+                                <ScheduleForm
+                                    schedule={schedule}
+                                    onSuccess={handleEditSuccess}
+                                    onCancel={requestClose}
+                                    onDirtyChange={setIsDirty}
+                                    customerAreas={customerAreas}
+                                    scheduleStatuses={scheduleStatuses}
+                                    workTypes={workTypes}
+                                    offices={offices}
+                                />
                             </div>
                         </div>
                     </div>
-                )
-            }
-        </div >
+                </div>
+            )}
+        </div>
     );
 }
