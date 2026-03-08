@@ -34,6 +34,7 @@ interface MonthViewProps {
     workTypes?: SerializedWorkType[];
     offices?: { id: string, name: string }[];
     showDayCounts?: boolean;
+    peopleLevel?: number;
 }
 
 const LANE_CAP_ENABLED = false; // future tenant setting hook
@@ -54,6 +55,7 @@ export function MonthView({
     workTypes = [],
     offices = [],
     showDayCounts = true,
+    peopleLevel = 0,
 }: MonthViewProps) {
     const router = useRouter();
 
@@ -556,6 +558,27 @@ export function MonthView({
                                                     {totalSchedulesCount}
                                                 </span>
                                             )}
+                                            {peopleLevel >= 2 && (() => {
+                                                const dayD = new Date(day); dayD.setHours(0, 0, 0, 0);
+                                                const dayE = new Date(day); dayE.setHours(23, 59, 59, 999);
+                                                const vacOnDay = vacations.filter(v => {
+                                                    const vs = new Date(v.startDate); const ve = new Date(v.endDate);
+                                                    return vs < dayE && ve > dayD;
+                                                }).length;
+                                                const schedOnDay = new Set(
+                                                    schedules.filter(s => {
+                                                        const ss = new Date(s.startTime); const se = new Date(s.endTime);
+                                                        return ss < dayE && se > dayD;
+                                                    }).flatMap(s => s.assignments?.map((a: any) => a.employee?.id) || [])
+                                                ).size;
+                                                const avail = Math.max(0, employees.length - vacOnDay - schedOnDay);
+                                                return (
+                                                    <div className="flex gap-0.5 mt-0.5 pointer-events-none">
+                                                        <span className="text-[8px] px-0.5 rounded bg-green-50 text-green-700">A:{avail}</span>
+                                                        {vacOnDay > 0 && <span className="text-[8px] px-0.5 rounded bg-amber-50 text-amber-600">V:{vacOnDay}</span>}
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                         {/* Quick Create overlay anchored to the cell */}
                                         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-auto opacity-0 group-hover/cell:opacity-100 transition-opacity">
@@ -719,6 +742,13 @@ export function MonthView({
                                                                 </span>
                                                             )}
                                                         </div>
+                                                    )}
+
+                                                    {/* Assignee summary (people >= 1) */}
+                                                    {peopleLevel >= 1 && schedule.assignments && schedule.assignments.length > 0 && (
+                                                        <span className="shrink-0 text-[8px] text-indigo-600 truncate max-w-[80px]" title={schedule.assignments.map((a: any) => a.employee?.name).join(', ')}>
+                                                            👤 {schedule.assignments.slice(0, 2).map((a: any) => a.employee?.name?.split(' ')[0]).join(', ')}{schedule.assignments.length > 2 ? ` +${schedule.assignments.length - 2}` : ''}
+                                                        </span>
                                                     )}
 
                                                     {/* Drag Handle */}

@@ -1,5 +1,5 @@
 import { requireAuthServer } from '@/lib/auth';
-import { getSchedules, getEmployees, getFilterDefaults } from '@/lib/queries';
+import { getSchedules, getEmployees, getVacations, getFilterDefaults } from '@/lib/queries';
 import { redirect } from 'next/navigation';
 import { CalendarViewToggle } from '@/components/calendar-view-toggle';
 import { CalendarFilter } from '@/components/calendar/calendar-filter';
@@ -14,7 +14,19 @@ import { SerializedScheduleWithAssignments } from '@/types';
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-    searchParams: Promise<{ date?: string, areas?: string, unstaffed?: string, loc?: string }>;
+    searchParams: Promise<{ date?: string, areas?: string, unstaffed?: string, loc?: string, people?: string }>;
+}
+
+function buildPeopleToggleHref(currentParams: Record<string, string | undefined>, currentLevel: number): string {
+    const next = (currentLevel + 1) % 3;
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(currentParams)) {
+        if (k === 'people' || !v) continue;
+        params.set(k, v);
+    }
+    if (next !== 0) params.set('people', String(next));
+    const qs = params.toString();
+    return qs ? `?${qs}` : '?';
 }
 
 export default async function DayCalendarPage({ searchParams }: PageProps) {
@@ -40,9 +52,10 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
     const dayEnd = new Date(currentDate);
     dayEnd.setHours(23, 59, 59, 999);
 
-    const [schedules, employees, customerAreas, scheduleStatuses, workTypes, offices, defaults] = await Promise.all([
+    const [schedules, employees, vacationsRaw, customerAreas, scheduleStatuses, workTypes, offices, defaults] = await Promise.all([
         getSchedules(auth.tenantId, { startDate: dayStart, endDate: dayEnd }),
         getEmployees(auth.tenantId),
+        getVacations(auth.tenantId, { startDate: dayStart, endDate: dayEnd }),
         import('@/lib/queries').then(m => m.getCustomerAreas(auth.tenantId)),
         import('@/lib/queries').then(m => m.getScheduleStatuses(auth.tenantId)),
         import('@/lib/queries').then(m => m.getWorkTypes(auth.tenantId)),
@@ -50,7 +63,9 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
         getFilterDefaults(auth.tenantId),
     ]);
 
-    // --- Merge: URL wins, else defaults, else hardcoded ---
+    const peopleLevel = params.people ? parseInt(params.people, 10) || 0 : 0;
+
+    // --- Merge filter defaults ---
     const areasRaw = params.areas;
     let effectiveAreas: string[] | null;
     if (areasRaw !== undefined) {
@@ -111,6 +126,7 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
     const prevDate = format(subDays(currentDate, 1), 'yyyy-MM-dd');
     const nextDate = format(addDays(currentDate, 1), 'yyyy-MM-dd');
     const todayDate = format(today, 'yyyy-MM-dd');
+    const peopleLevelLabels = ['Off', 'Names', 'Full'];
 
     return (
         <div className="space-y-4">
@@ -118,6 +134,14 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
                 <h1 className="text-2xl font-bold tracking-tight text-gray-900">Calendar</h1>
                 <div className="flex items-center gap-4">
                     <CustomerAreaSummaryBadges summary={availabilitySummary} />
+                    <a
+                        href={buildPeopleToggleHref(params as any, peopleLevel)}
+                        title={`People: ${peopleLevelLabels[peopleLevel]} → ${peopleLevelLabels[(peopleLevel + 1) % 3]}`}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-md border shadow-sm transition-colors ${peopleLevel > 0 ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'
+                            }`}
+                    >
+                        👤 <span className="text-[10px]">{peopleLevel}</span>
+                    </a>
                     <Suspense>
                         <CalendarFilter customerAreas={customerAreas} view="day" role={auth.user.role} filterDefaults={defaults} />
                     </Suspense>
@@ -148,7 +172,12 @@ export default async function DayCalendarPage({ searchParams }: PageProps) {
                 </div>
 
                 <div className="overflow-y-auto max-h-[calc(100vh-280px)]">
-                    <DayView schedules={filteredSchedules} />
+                    <DayView
+                        schedules={filteredSchedules}
+                        peopleLevel={peopleLevel}
+                        employees={employees}
+                        vacations={vacationsRaw}
+                    />
                 </div>
             </div>
 

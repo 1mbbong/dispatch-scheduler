@@ -11,7 +11,19 @@ import { Suspense } from 'react';
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-    searchParams: Promise<{ date?: string, areas?: string, unstaffed?: string, loc?: string, ghosts?: string, dayCounts?: string }>;
+    searchParams: Promise<{ date?: string, areas?: string, unstaffed?: string, loc?: string, ghosts?: string, dayCounts?: string, people?: string }>;
+}
+
+function buildPeopleToggleHref(currentParams: Record<string, string | undefined>, currentLevel: number): string {
+    const next = (currentLevel + 1) % 3;
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(currentParams)) {
+        if (k === 'people' || !v) continue;
+        params.set(k, v);
+    }
+    if (next !== 0) params.set('people', String(next));
+    const qs = params.toString();
+    return qs ? `?${qs}` : '?';
 }
 
 export default async function MonthCalendarPage({ searchParams }: PageProps) {
@@ -41,8 +53,10 @@ export default async function MonthCalendarPage({ searchParams }: PageProps) {
         getFilterDefaults(auth!.tenantId),
     ]);
 
-    // --- Merge: URL wins, else defaults, else hardcoded ---
-    // Areas
+    // People level: URL wins, default 0
+    const peopleLevel = params.people ? parseInt(params.people, 10) || 0 : 0;
+
+    // --- Merge filter defaults ---
     const areasRaw = params.areas;
     let effectiveAreas: string[] | null;
     if (areasRaw !== undefined) {
@@ -50,15 +64,13 @@ export default async function MonthCalendarPage({ searchParams }: PageProps) {
     } else if (defaults?.areas && defaults.areas !== 'ALL') {
         effectiveAreas = defaults.areas;
     } else {
-        effectiveAreas = null; // All
+        effectiveAreas = null;
     }
 
-    // Unstaffed
     const effectiveUnstaffed = params.unstaffed !== undefined
         ? params.unstaffed === '1'
         : (defaults?.unstaffed ?? false);
 
-    // Location
     let effectiveLoc: string | undefined;
     if (params.loc !== undefined) {
         effectiveLoc = params.loc;
@@ -70,17 +82,14 @@ export default async function MonthCalendarPage({ searchParams }: PageProps) {
         effectiveLoc = parts.length === 3 ? undefined : (parts.length === 0 ? 'none' : parts.join(','));
     }
 
-    // Ghosts (month-only)
     const effectiveGhosts = params.ghosts !== undefined
         ? params.ghosts !== '0'
         : (defaults?.ghosts ?? true);
 
-    // DayCounts (month-only)
     const effectiveDayCounts = params.dayCounts !== undefined
         ? params.dayCounts !== '0'
         : (defaults?.dayCounts ?? true);
 
-    // Ghost snapshots
     const rescheduleSnapshots = effectiveGhosts
         ? await getLatestRescheduleSnapshots(
             auth!.tenantId,
@@ -119,12 +128,23 @@ export default async function MonthCalendarPage({ searchParams }: PageProps) {
         );
     }
 
+    const peopleLevelLabels = ['Off', 'Names', 'Full'];
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold tracking-tight text-gray-900">Calendar</h1>
                 <div className="flex items-center gap-4">
                     <CustomerAreaSummaryBadges summary={availabilitySummary} />
+                    {/* People toggle */}
+                    <a
+                        href={buildPeopleToggleHref(params as any, peopleLevel)}
+                        title={`People: ${peopleLevelLabels[peopleLevel]} → ${peopleLevelLabels[(peopleLevel + 1) % 3]}`}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-md border shadow-sm transition-colors ${peopleLevel > 0 ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'
+                            }`}
+                    >
+                        👤 <span className="text-[10px]">{peopleLevel}</span>
+                    </a>
                     <Suspense>
                         <CalendarFilter customerAreas={customerAreas} view="month" role={auth!.user.role} filterDefaults={defaults} />
                     </Suspense>
@@ -146,6 +166,7 @@ export default async function MonthCalendarPage({ searchParams }: PageProps) {
                 workTypes={workTypes}
                 offices={offices}
                 showDayCounts={effectiveDayCounts}
+                peopleLevel={peopleLevel}
             />
         </div>
     );

@@ -28,6 +28,7 @@ interface WeekViewProps {
     scheduleStatuses?: SerializedScheduleStatus[];
     workTypes?: SerializedWorkType[];
     offices?: { id: string, name: string }[];
+    peopleLevel?: number;
 }
 
 export function WeekView({
@@ -39,7 +40,8 @@ export function WeekView({
     customerAreas = [],
     scheduleStatuses = [],
     workTypes = [],
-    offices = []
+    offices = [],
+    peopleLevel = 0,
 }: WeekViewProps) {
     const router = useRouter();
     const toast = useToast();
@@ -358,6 +360,27 @@ export function WeekView({
                                     <p className={cn("text-lg font-medium text-gray-900", isToday && "text-blue-600")}>
                                         {format(day, 'd')}
                                     </p>
+                                    {peopleLevel >= 2 && (() => {
+                                        const dayD = new Date(day); dayD.setHours(0, 0, 0, 0);
+                                        const dayE = new Date(day); dayE.setHours(23, 59, 59, 999);
+                                        const vacOnDay = vacations.filter(v => {
+                                            const vs = new Date(v.startDate); const ve = new Date(v.endDate);
+                                            return vs < dayE && ve > dayD;
+                                        }).length;
+                                        const schedEmps = new Set(
+                                            schedules.filter(s => {
+                                                const ss = new Date(s.startTime); const se = new Date(s.endTime);
+                                                return ss < dayE && se > dayD;
+                                            }).flatMap(s => s.assignments?.map((a: any) => a.employee?.id) || [])
+                                        ).size;
+                                        const avail = Math.max(0, employees.length - vacOnDay - schedEmps);
+                                        return (
+                                            <div className="flex gap-0.5 mt-0.5 justify-center">
+                                                <span className="text-[8px] px-0.5 rounded bg-green-50 text-green-700">A:{avail}</span>
+                                                {vacOnDay > 0 && <span className="text-[8px] px-0.5 rounded bg-amber-50 text-amber-600">V:{vacOnDay}</span>}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             );
                         })}
@@ -552,28 +575,30 @@ export function WeekView({
                                         )}
 
                                         {/* Assignments inline/overlap container */}
-                                        <div className="flex flex-wrap items-center mt-1 gap-1">
-                                            {schedule.assignments.length > 0 ? (
-                                                <div className="flex -space-x-1 overflow-hidden shrink-0">
-                                                    {schedule.assignments.map(a => (
-                                                        <div
-                                                            key={a.id}
-                                                            className="inline-block h-5 w-5 rounded-full ring-2 ring-white bg-indigo-100 flex items-center justify-center text-[9px] font-bold text-indigo-700"
-                                                            title={a.employee.name}
-                                                        >
-                                                            {a.employee.name.charAt(0)}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            ) : (
-                                                <span className="text-orange-500 italic text-[10px]">Unassigned</span>
-                                            )}
-                                            {schedule.assignments.length > 5 && (
-                                                <span className="text-[10px] text-gray-500 ml-1">
-                                                    +{schedule.assignments.length - 5}
-                                                </span>
-                                            )}
-                                        </div>
+                                        {peopleLevel >= 1 && (
+                                            <div className="flex flex-wrap items-center mt-1 gap-1">
+                                                {schedule.assignments.length > 0 ? (
+                                                    <div className="flex -space-x-1 overflow-hidden shrink-0">
+                                                        {schedule.assignments.map(a => (
+                                                            <div
+                                                                key={a.id}
+                                                                className="inline-block h-5 w-5 rounded-full ring-2 ring-white bg-indigo-100 flex items-center justify-center text-[9px] font-bold text-indigo-700"
+                                                                title={a.employee.name}
+                                                            >
+                                                                {a.employee.name.charAt(0)}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-orange-500 italic text-[10px]">Unassigned</span>
+                                                )}
+                                                {schedule.assignments.length > 5 && (
+                                                    <span className="text-[10px] text-gray-500 ml-1">
+                                                        +{schedule.assignments.length - 5}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}

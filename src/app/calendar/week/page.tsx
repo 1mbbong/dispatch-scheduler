@@ -11,7 +11,19 @@ import { Suspense } from 'react';
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-    searchParams: Promise<{ date?: string, areas?: string, unstaffed?: string, loc?: string, dayCounts?: string }>;
+    searchParams: Promise<{ date?: string, areas?: string, unstaffed?: string, loc?: string, dayCounts?: string, people?: string }>;
+}
+
+function buildPeopleToggleHref(currentParams: Record<string, string | undefined>, currentLevel: number): string {
+    const next = (currentLevel + 1) % 3;
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(currentParams)) {
+        if (k === 'people' || !v) continue;
+        params.set(k, v);
+    }
+    if (next !== 0) params.set('people', String(next));
+    const qs = params.toString();
+    return qs ? `?${qs}` : '?';
 }
 
 export default async function WeekCalendarPage({ searchParams }: PageProps) {
@@ -40,7 +52,9 @@ export default async function WeekCalendarPage({ searchParams }: PageProps) {
         getFilterDefaults(auth.tenantId),
     ]);
 
-    // --- Merge: URL wins, else defaults, else hardcoded ---
+    const peopleLevel = params.people ? parseInt(params.people, 10) || 0 : 0;
+
+    // --- Merge filter defaults ---
     const areasRaw = params.areas;
     let effectiveAreas: string[] | null;
     if (areasRaw !== undefined) {
@@ -97,12 +111,22 @@ export default async function WeekCalendarPage({ searchParams }: PageProps) {
         );
     }
 
+    const peopleLevelLabels = ['Off', 'Names', 'Full'];
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold tracking-tight text-gray-900">Calendar</h1>
                 <div className="flex items-center gap-4">
                     <CustomerAreaSummaryBadges summary={availabilitySummary} />
+                    <a
+                        href={buildPeopleToggleHref(params as any, peopleLevel)}
+                        title={`People: ${peopleLevelLabels[peopleLevel]} → ${peopleLevelLabels[(peopleLevel + 1) % 3]}`}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-md border shadow-sm transition-colors ${peopleLevel > 0 ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'
+                            }`}
+                    >
+                        👤 <span className="text-[10px]">{peopleLevel}</span>
+                    </a>
                     <Suspense>
                         <CalendarFilter customerAreas={customerAreas} view="week" role={auth.user.role} filterDefaults={defaults} />
                     </Suspense>
@@ -122,6 +146,7 @@ export default async function WeekCalendarPage({ searchParams }: PageProps) {
                 scheduleStatuses={scheduleStatuses}
                 workTypes={workTypes}
                 offices={offices}
+                peopleLevel={peopleLevel}
             />
         </div>
     );
