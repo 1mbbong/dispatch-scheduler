@@ -56,50 +56,83 @@ export function RescheduleConfirmModal({
         );
     };
 
-    const shiftAssignments = async (): Promise<{ total: number; created: number; failed: number }> => {
-        if (assignments.length === 0) return { total: 0, created: 0, failed: 0 };
+    interface ShiftResult { total: number; created: number; failed: number; rollbackFailed: number; warnings: number }
 
-        const originalStart = parseISO(schedule.startTime);
-        const deltaDays = differenceInCalendarDays(newStart, originalStart);
+    const shiftAssignments = async (): Promise<ShiftResult> => {
+        if (assignments.length === 0) return { total: 0, created: 0, failed: 0, rollbackFailed: 0, warnings: 0 };
 
-        // POST new shifted assignments (default 409 policy — no allowConflicts)
-        const results = await Promise.allSettled(
-            assignments.map(a => {
-                const oldDate = parseISO(a.date);
-                const shiftedDate = new Date(Date.UTC(
-                    oldDate.getUTCFullYear(),
-                    oldDate.getUTCMonth(),
-                    oldDate.getUTCDate() + deltaDays,
-                    0, 0, 0, 0
-                ));
+        const deltaDays = differenceInCalendarDays(newStart, parseISO(schedule.startTime));
 
-                return fetch('/api/assignments', {
+        // Build items with stable string-slice day math (no parseISO drift)
+        type ShiftItem = { id: string; employeeId: string; oldISO: string; oldDayKey: string; newISO: string; newDayKey: string };
+        const seen = new Set<string>();
+        const items: ShiftItem[] = [];
+
+        for (const a of assignments) {
+            const oldDayKey = a.date.slice(0, 10); // "YYYY-MM-DD" — timezone-proof
+            const [y, m, d] = oldDayKey.split('-').map(Number);
+            const oldISO = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)).toISOString();
+            const newISO = new Date(Date.UTC(y, m - 1, d + deltaDays, 0, 0, 0, 0)).toISOString();
+            const newDayKey = newISO.slice(0, 10);
+
+            // Dedup by employeeId|newDayKey before processing
+            const key = `${a.employeeId}|${newDayKey}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            items.push({ id: a.id, employeeId: a.employeeId, oldISO, oldDayKey, newISO, newDayKey });
+        }
+
+        // Sort to avoid self-collision on overlapping days
+        if (deltaDays > 0) {
+            items.sort((a, b) => (a.oldDayKey > b.oldDayKey ? -1 : a.oldDayKey < b.oldDayKey ? 1 : 0));
+        } else if (deltaDays < 0) {
+            items.sort((a, b) => (a.oldDayKey < b.oldDayKey ? -1 : a.oldDayKey > b.oldDayKey ? 1 : 0));
+        }
+
+        // Per-assignment sequential shift with rollback on failure
+        let created = 0;
+        let failed = 0;
+        let rollbackFailed = 0;
+        let warningCount = 0;
+
+        for (const item of items) {
+            // a) DELETE old assignment
+            await fetch(`/api/assignments/${item.id}`, { method: 'DELETE' });
+
+            // b) POST shifted assignment
+            const postRes = await fetch('/api/assignments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    scheduleId: schedule.id,
+                    employeeId: item.employeeId,
+                    date: item.newISO,
+                    allowConflicts: true,
+                }),
+            });
+
+            if (postRes.ok) {
+                created++;
+                const data = await postRes.json();
+                if (Array.isArray(data.warnings)) warningCount += data.warnings.length;
+            } else {
+                // c) POST failed — rollback: re-create original assignment
+                failed++;
+                const rollbackRes = await fetch('/api/assignments', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         scheduleId: schedule.id,
-                        employeeId: a.employeeId,
-                        date: shiftedDate.toISOString(),
+                        employeeId: item.employeeId,
+                        date: item.oldISO,
+                        allowConflicts: true,
                     }),
-                }).then(r => r.ok);
-            })
-        );
-
-        // Deterministic counting from settled results
-        let created = 0;
-        let failed = 0;
-        for (const r of results) {
-            if (r.status === 'fulfilled' && r.value) {
-                created++;
-            } else {
-                failed++;
+                });
+                if (!rollbackRes.ok) rollbackFailed++;
             }
         }
 
-        // DELETE old assignments after creation attempts
-        await deleteAllAssignments();
-
-        return { total: assignments.length, created, failed };
+        return { total: items.length, created, failed, rollbackFailed, warnings: warningCount };
     };
 
     // ---- button handlers ----
@@ -116,11 +149,17 @@ export function RescheduleConfirmModal({
                 await deleteAllAssignments();
                 toast.success('Schedule moved. Assignments cleared.');
             } else {
-                const shifted = await shiftAssignments();
-                if (shifted.failed > 0) {
-                    toast.info(`Schedule moved. ${shifted.created}/${shifted.total} assignments shifted (${shifted.failed} conflicts).`);
-                } else if (shifted.total > 0) {
-                    toast.success(`Schedule moved. ${shifted.created} assignment(s) shifted.`);
+                const s = await shiftAssignments();
+                if (s.failed > 0 || s.rollbackFailed > 0) {
+                    const parts = [`Shifted ${s.created}/${s.total}`];
+                    if (s.failed > 0) parts.push(`${s.failed} failed`);
+                    if (s.rollbackFailed > 0) parts.push(`${s.rollbackFailed} rollbacks failed`);
+                    if (s.warnings > 0) parts.push(`${s.warnings} warnings`);
+                    toast.info(`Schedule moved. ${parts.join(', ')}.`);
+                } else if (s.warnings > 0) {
+                    toast.info(`Schedule moved. Shifted ${s.created}/${s.total} assignments (${s.warnings} warnings).`);
+                } else if (s.total > 0) {
+                    toast.success(`Schedule moved. ${s.created} assignment(s) shifted.`);
                 } else {
                     toast.success('Schedule moved.');
                 }

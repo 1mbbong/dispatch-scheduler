@@ -5,6 +5,7 @@ import { MainNav } from "@/components/main-nav";
 import { ToastProvider } from "@/components/ui/toast";
 import { requireAuthServer } from "@/lib/auth";
 import type { Role } from "@/lib/db";
+import { Suspense } from "react";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -32,7 +33,7 @@ export default async function RootLayout({
         <ToastProvider>
           <MainNav userRole={userRole} />
           <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-            {children}
+            <Suspense fallback={null}>{children}</Suspense>
           </main>
         </ToastProvider>
       </body>

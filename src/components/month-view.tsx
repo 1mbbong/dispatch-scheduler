@@ -680,23 +680,30 @@ export function MonthView({
                                                 <div
                                                     key={`shadow-${schedule.id}-${weekIndex}-${idx}`}
                                                     className={cn(
-                                                        "mx-0.5 px-1.5 py-0.5 text-[10px] sm:text-xs truncate rounded cursor-pointer pointer-events-auto transition-opacity z-10 focus:outline-none focus:ring-2 focus:ring-indigo-500 select-none",
-                                                        "opacity-80 border border-dashed border-gray-400 bg-gray-50/60 hover:bg-gray-100 text-gray-800",
+                                                        "mx-0.5 px-1.5 py-0.5 text-[10px] sm:text-xs truncate rounded pointer-events-none select-none",
+                                                        "opacity-80 border border-dashed border-gray-400 bg-gray-50/60 text-gray-800",
                                                         block.startsBeforeWeek ? "rounded-l-none border-l-0 ml-0" : "rounded-l",
                                                         block.endsAfterWeek ? "rounded-r-none mr-0" : "rounded-r"
                                                     )}
                                                     style={{
                                                         gridColumn: `${block.gridColumnStart} / ${block.gridColumnEnd}`,
                                                     }}
-                                                    title={`Rescheduled: ${schedule.title} (Click to see History)`}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        router.push(`/schedules/${schedule.id}?tab=history`);
-                                                    }}
+                                                    title={`Rescheduled: ${schedule.title}`}
                                                 >
                                                     <div className="font-medium truncate flex items-center gap-1 text-slate-800">
                                                         <span className="shrink-0 text-[10px] uppercase font-bold tracking-wider text-slate-500 px-1 border border-slate-300 rounded-sm bg-slate-100">RESCHEDULED</span>
                                                         <span>{schedule.title}</span>
+                                                        <button
+                                                            type="button"
+                                                            className="pointer-events-auto shrink-0 ml-auto text-[10px] text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                router.push(`/schedules/${schedule.id}?tab=history`);
+                                                            }}
+                                                            title="View history"
+                                                        >
+                                                            History
+                                                        </button>
                                                     </div>
                                                 </div>
                                             );
