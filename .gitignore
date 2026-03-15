@@ -49,3 +49,7 @@ playwright-report/
 
 # allow env template
 !.env.example
+
+# local-only
+.claude/
+docs/
