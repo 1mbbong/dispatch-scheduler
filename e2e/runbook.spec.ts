@@ -419,6 +419,52 @@ test.describe('Phase 1 Pilot Runbook Automation', () => {
         expect(foundActive).toBeFalsy();
     });
 
+    // 10) A-08: Cancel in ScheduleForm fires 0 mutations
+    test('A-08: Cancel in ScheduleForm fires 0 mutations (no PATCH schedules, no POST/DELETE assignments)', async ({ page }) => {
+        // Login via UI
+        await page.goto('/login');
+        await page.fill('input[name="email"]', 'admin@demo.com');
+        await page.fill('input[name="password"]', 'password123');
+        await page.click('button[type="submit"]');
+        await page.waitForURL('**/calendar/week**');
+
+        // Navigate to the base schedule's detail page
+        await page.goto(`/schedules/${scheduleId}`);
+        await page.waitForLoadState('networkidle');
+
+        // Register mutation listener BEFORE opening the form
+        const mutationRequests: string[] = [];
+        page.on('request', req => {
+            const method = req.method();
+            const url = req.url();
+            if (
+                (method === 'PATCH' && /\/api\/schedules\/[^/]+/.test(url)) ||
+                ((method === 'POST' || method === 'DELETE') && /\/api\/assignments/.test(url))
+            ) {
+                mutationRequests.push(`${method} ${url}`);
+            }
+        });
+
+        // Open Edit Schedule modal
+        await page.click('button:has-text("Edit Schedule")');
+        await page.waitForSelector('form', { state: 'visible' });
+
+        // Click Cancel without touching any field
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+
+        // Modal must be dismissed (form unmounted from DOM)
+        await expect(page.locator('form')).not.toBeVisible({ timeout: 3000 });
+
+        // Brief settle window for any in-flight async requests
+        await page.waitForTimeout(300);
+
+        // Assert: zero mutations fired
+        expect(
+            mutationRequests,
+            `Expected 0 mutations but captured: ${mutationRequests.join(', ')}`
+        ).toHaveLength(0);
+    });
+
     // 9) O3 Work Location: OFFICE→REMOTE clears officeId
     test('O3 Work Location: OFFICE persists officeId, REMOTE clears it', async () => {
         // Pick an active office from seed

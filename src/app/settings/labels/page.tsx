@@ -5,7 +5,7 @@ import { LabelManager } from '@/components/settings/label-manager';
 import { Suspense } from 'react';
 
 export const metadata = {
-    title: 'Label Settings | Dispatch Scheduler',
+    title: 'Label Settings | ORDI',
 };
 
 export default async function LabelsSettingsPage() {

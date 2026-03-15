@@ -9,7 +9,7 @@ import type { Role } from "@/lib/db";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Dispatch Scheduler",
+  title: "ORDI",
   description: "Multi-tenant dispatch scheduling application",
 };
 

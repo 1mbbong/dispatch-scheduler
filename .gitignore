@@ -46,3 +46,10 @@ next-env.d.ts
 playwright-report/
 *.orig
 *.rej
+
+# allow env template
+!.env.example
+
+# local-only
+.claude/
+docs/
